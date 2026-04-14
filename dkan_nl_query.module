@@ -1,0 +1,20 @@
+<?php
+
+/**
+ * @file
+ * DKAN Natural Language Query module.
+ */
+
+/**
+ * Implements hook_theme().
+ */
+function dkan_nl_query_theme(): array {
+  return [
+    'nl_query_widget' => [
+      'variables' => [
+        'dataset_id' => NULL,
+      ],
+      'template' => 'nl-query-widget',
+    ],
+  ];
+}

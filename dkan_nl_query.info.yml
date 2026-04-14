@@ -1,0 +1,8 @@
+name: DKAN Natural Language Query
+type: module
+description: Natural language query interface for DKAN datasets using Claude AI.
+core_version_requirement: ^10.2 || ^11
+package: DKAN
+dependencies:
+  - dkan_mcp:dkan_mcp
+configure: dkan_nl_query.settings

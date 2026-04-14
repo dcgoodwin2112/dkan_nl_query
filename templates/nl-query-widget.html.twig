@@ -1,0 +1,46 @@
+<div class="nl-query-widget" data-dataset-id="{{ dataset_id }}">
+  <div class="nl-query-thread-header" hidden>
+    <button type="button" class="nl-query-new-conversation">New conversation</button>
+  </div>
+  <div class="nl-query-thread"></div>
+
+  <div class="nl-query-status" hidden>
+    <span class="nl-query-spinner"></span>
+    <span class="nl-query-status-text"></span>
+  </div>
+
+  <div class="nl-query-error" hidden></div>
+
+  <form class="nl-query-form">
+    <div class="nl-query-dataset-selector"{% if dataset_id %} hidden{% endif %}>
+      <label for="nl-query-dataset-select" class="nl-query-dataset-label">Dataset</label>
+      <select id="nl-query-dataset-select" class="nl-query-dataset-select">
+        <option value="">All datasets (AI will find the right one)</option>
+      </select>
+    </div>
+    <div class="nl-query-input-wrapper">
+      <label for="nl-query-input" class="visually-hidden">Ask a question about this dataset</label>
+      <textarea
+        id="nl-query-input"
+        class="nl-query-input"
+        placeholder="Ask a question about this data..."
+        autocomplete="off"
+        rows="1"
+        required
+      ></textarea>
+      <button type="submit" class="nl-query-submit">Ask</button>
+    </div>
+    <div class="nl-query-footer">
+      <div class="nl-query-examples">
+        <span class="nl-query-examples-label">Try:</span>
+        <button type="button" class="nl-query-example" data-question="Show me the first 5 rows">First 5 rows</button>
+        <button type="button" class="nl-query-example" data-question="How many records are in this dataset?">Record count</button>
+        <button type="button" class="nl-query-example" data-question="Summarize this dataset">Summarize</button>
+      </div>
+      <div class="nl-query-model-selector">
+        <label for="nl-query-model" class="nl-query-model-label">Model:</label>
+        <select id="nl-query-model" class="nl-query-model-select"></select>
+      </div>
+    </div>
+  </form>
+</div>
