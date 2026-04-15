@@ -2,6 +2,9 @@
 
 namespace Drupal\dkan_nl_query\Controller;
 
+use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\dkan_nl_query\Service\NlQueryService;
 use Drupal\dkan_nl_query\Service\SchemaContextBuilder;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -16,6 +19,9 @@ class NlQueryController {
   public function __construct(
     protected NlQueryService $nlQueryService,
     protected SchemaContextBuilder $schemaContextBuilder,
+    protected EntityTypeManagerInterface $entityTypeManager,
+    protected AccountProxyInterface $currentUser,
+    protected ConfigFactoryInterface $configFactory,
   ) {}
 
   /**
@@ -34,12 +40,21 @@ class NlQueryController {
     // Optional model override from frontend selector.
     $model = $request->request->get('model') ?: NULL;
 
+    // Conversation ID for follow-ups.
+    $conversationId = $request->request->get('conversation_id') ?: NULL;
+
     // Normalize empty dataset_id to null for cross-dataset mode.
     $datasetId = !empty($dataset_id) ? $dataset_id : NULL;
 
-    return new StreamedResponse(function () use ($datasetId, $question, $history, $model) {
+    // Capture references for the closure.
+    $entityTypeManager = $this->entityTypeManager;
+    $currentUser = $this->currentUser;
+    $config = $this->configFactory->get('dkan_nl_query.settings');
+    $shouldSave = $currentUser->isAuthenticated() && ($config->get('save_chat_history') ?? TRUE);
+
+    return new StreamedResponse(function () use ($datasetId, $question, $history, $model, $conversationId, $entityTypeManager, $currentUser, $shouldSave) {
       // Allow long-running agentic loops (multiple Claude API calls).
-      set_time_limit(120);
+      set_time_limit(300);
 
       // Prevent buffering.
       while (ob_get_level()) {
@@ -53,10 +68,92 @@ class NlQueryController {
       };
 
       try {
-        $this->nlQueryService->query($datasetId, $question, $emit, $history, $model);
+        $result = $this->nlQueryService->query($datasetId, $question, $emit, $history, $model);
       }
       catch (\Throwable $e) {
         $emit('error', ['message' => 'Server error: ' . $e->getMessage()]);
+        echo "event: done\ndata: {}\n\n";
+        flush();
+        return;
+      }
+
+      // Save conversation if user is authenticated and feature is enabled.
+      if ($shouldSave && !empty(trim($result['answer'] ?? ''))) {
+        try {
+          $convStorage = $entityTypeManager->getStorage('nl_query_conversation');
+          $msgStorage = $entityTypeManager->getStorage('nl_query_message');
+
+          // Load or create conversation.
+          if ($conversationId) {
+            $conversation = $convStorage->load($conversationId);
+            // Verify ownership.
+            if ($conversation && (int) $conversation->get('uid')->target_id !== (int) $currentUser->id()) {
+              $conversation = NULL;
+            }
+          }
+          else {
+            $conversation = NULL;
+          }
+
+          if (!$conversation) {
+            $title = mb_substr(trim($question), 0, 255);
+            $conversation = $convStorage->create([
+              'uid' => $currentUser->id(),
+              'title' => $title,
+              'dataset_id' => $datasetId ?: '',
+              'pinned' => FALSE,
+            ]);
+            $conversation->save();
+          }
+          else {
+            // Touch the changed timestamp.
+            $conversation->save();
+          }
+
+          // Determine next weight.
+          $maxWeight = 0;
+          $existingIds = $msgStorage->getQuery()
+            ->accessCheck(FALSE)
+            ->condition('conversation_id', $conversation->id())
+            ->sort('weight', 'DESC')
+            ->range(0, 1)
+            ->execute();
+          if ($existingIds) {
+            $last = $msgStorage->load(reset($existingIds));
+            $maxWeight = (int) $last->get('weight')->value;
+          }
+
+          // Save user message.
+          $msgStorage->create([
+            'conversation_id' => $conversation->id(),
+            'role' => 'user',
+            'content' => $question,
+            'weight' => $maxWeight + 1,
+          ])->save();
+
+          // Save assistant message with collected data.
+          $msgStorage->create([
+            'conversation_id' => $conversation->id(),
+            'role' => 'assistant',
+            'content' => $result['answer'],
+            'chart_spec' => $result['chart_spec'] ? json_encode($result['chart_spec']) : NULL,
+            'table_data' => $result['table_data'] ? json_encode($result['table_data']) : NULL,
+            'tool_calls' => !empty($result['tool_calls']) ? json_encode($result['tool_calls']) : NULL,
+            'weight' => $maxWeight + 2,
+          ])->save();
+
+          // Emit conversation ID so frontend can track follow-ups.
+          $emit('conversation', [
+            'id' => (int) $conversation->id(),
+            'title' => $conversation->get('title')->value,
+          ]);
+        }
+        catch (\Throwable $e) {
+          // Don't fail the response if saving fails.
+          \Drupal::logger('dkan_nl_query')->warning('Failed to save conversation: @message', [
+            '@message' => $e->getMessage(),
+          ]);
+        }
       }
 
       echo "event: done\ndata: {}\n\n";

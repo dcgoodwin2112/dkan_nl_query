@@ -43,7 +43,7 @@ class LlmProviderFactory {
         }
       }
     }
-    $provider = $provider ?: $config->get('provider') ?: 'anthropic';
+    $provider = $provider ?: 'anthropic';
 
     return match ($provider) {
       'openai' => $this->createOpenAi($config->get('openai_api_key') ?: ''),

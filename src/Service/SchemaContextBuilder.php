@@ -169,11 +169,29 @@ class SchemaContextBuilder {
       $full = $this->metastoreTools->getDataset($ds['identifier']);
       $meta = $full['dataset'] ?? $full;
 
+      // Get row counts for imported resources.
+      $dists = $this->metastoreTools->listDistributions($ds['identifier']);
+      $totalRows = 0;
+      $importedResources = 0;
+      foreach ($dists['distributions'] ?? [] as $dist) {
+        $rid = $dist['resource_id'] ?? NULL;
+        if (!$rid) {
+          continue;
+        }
+        $status = $this->datastoreTools->getImportStatus($rid);
+        if (($status['status'] ?? '') === 'done') {
+          $totalRows += $status['num_of_rows'] ?? 0;
+          $importedResources++;
+        }
+      }
+
       $datasets[] = [
         'identifier' => $ds['identifier'],
         'title' => $ds['title'] ?? 'Untitled',
         'description' => isset($ds['description']) ? mb_substr($ds['description'], 0, 200) : '',
         'distributions' => $ds['distributions'] ?? 0,
+        'imported_resources' => $importedResources,
+        'total_rows' => $totalRows,
         'keywords' => $meta['keyword'] ?? [],
         'themes' => $meta['theme'] ?? [],
       ];
@@ -199,8 +217,18 @@ class SchemaContextBuilder {
     $prompt .= "## Available Datasets ({$catalog['total']} total)\n\n";
     foreach ($catalog['datasets'] as $ds) {
       $prompt .= "- **{$ds['title']}** (ID: `{$ds['identifier']}`)";
-      if ($ds['distributions']) {
-        $prompt .= " — {$ds['distributions']} file(s)";
+      $details = [];
+      if ($ds['imported_resources'] ?? 0) {
+        $details[] = "{$ds['imported_resources']} queryable resource(s)";
+      }
+      if ($ds['total_rows'] ?? 0) {
+        $details[] = number_format($ds['total_rows']) . " rows";
+      }
+      elseif (!($ds['imported_resources'] ?? 0)) {
+        $details[] = "not imported (cannot query)";
+      }
+      if ($details) {
+        $prompt .= " — " . implode(', ', $details);
       }
       $tags = array_merge($ds['keywords'] ?? [], $ds['themes'] ?? []);
       if ($tags) {
@@ -213,13 +241,14 @@ class SchemaContextBuilder {
     }
 
     $prompt .= "\n## Workflow\n\n";
-    $prompt .= "1. Use search_datasets or search_columns to find relevant data.\n";
-    $prompt .= "2. Use list_distributions(dataset_id) to get the resource_id (identifier__version format).\n";
-    $prompt .= "3. Use get_datastore_schema(resource_id) to discover columns.\n";
-    $prompt .= "4. Optionally use get_datastore_stats to understand data distribution before querying.\n";
-    $prompt .= "5. Use query_datastore(resource_id, ...) to answer the question.\n";
-    $prompt .= "6. To compare data across datasets, use query_datastore_join with two resource_ids.\n";
-    $prompt .= "7. Don't reproduce the full query results as a table — the UI shows an interactive data table automatically. You may use small markdown tables for summaries or comparisons.\n\n";
+    $prompt .= "The dataset list above already includes row counts and import status. Use this data directly for questions about dataset size or availability — do NOT call tools to re-check what is already shown above.\n\n";
+    $prompt .= "To query a specific dataset's data:\n";
+    $prompt .= "1. Use find_dataset_resources(title) to get the resource_id by dataset name — this avoids typing UUIDs. Example: find_dataset_resources(\"shark\").\n";
+    $prompt .= "2. Use get_datastore_schema(resource_id) to discover columns.\n";
+    $prompt .= "3. Use query_datastore(resource_id, ...) to answer the question.\n";
+    $prompt .= "4. To compare data across datasets, use query_datastore_join with two resource_ids.\n";
+    $prompt .= "5. Don't reproduce the full query results as a table — the UI shows an interactive data table automatically. You may use small markdown tables for summaries or comparisons.\n";
+    $prompt .= "6. Datasets marked \"not imported\" have no queryable data — skip them.\n\n";
 
     $prompt .= "## Important Notes\n\n";
     $prompt .= "- Resource IDs use `identifier__version` format (e.g., `abc123__1773329007`). Get them from list_distributions.\n";
@@ -227,6 +256,8 @@ class SchemaContextBuilder {
     $prompt .= "- Conditions must be a JSON string array, e.g.: `[{\"property\":\"state\",\"value\":\"CA\",\"operator\":\"=\"}]`\n";
     $prompt .= "- Maximum 500 rows per query. Use pagination (offset) for more.\n";
     $prompt .= "- Cannot filter on aggregated values (no HAVING clause).\n";
+
+    $prompt .= $this->getChartGuidance();
 
     return $prompt;
   }
@@ -292,6 +323,36 @@ class SchemaContextBuilder {
     $prompt .= "- For IN: `[{\"property\":\"state\",\"value\":[\"CA\",\"TX\"],\"operator\":\"in\"}]`\n";
     $prompt .= "- Maximum 500 rows per query. Single-column sort only.\n";
     $prompt .= "- Cannot filter on aggregated values (no HAVING). Cannot mix aggregate and arithmetic expressions.\n";
+
+    $prompt .= $this->getChartGuidance();
+
+    return $prompt;
+  }
+
+  /**
+   * Get chart visualization guidance for system prompts.
+   */
+  protected function getChartGuidance(): string {
+    $prompt = "\n## Visualization\n\n";
+    $prompt .= "When query results would benefit from a chart, use the create_chart tool with a Vega-Lite v5 spec.\n";
+    $prompt .= "Good candidates: comparisons (bar), trends over time (line), distributions (histogram), proportions (arc), correlations (point).\n";
+    $prompt .= "The spec must include data.values with the query results. Always include the \$schema field.\n\n";
+    $prompt .= "Example bar chart spec:\n";
+    $prompt .= "```json\n";
+    $prompt .= "{\n";
+    $prompt .= "  \"\$schema\": \"https://vega.github.io/schema/vega-lite/v5.json\",\n";
+    $prompt .= "  \"width\": \"container\",\n";
+    $prompt .= "  \"data\": {\"values\": [{\"state\": \"CA\", \"rate\": 11.2}, {\"state\": \"TX\", \"rate\": 15.7}]},\n";
+    $prompt .= "  \"mark\": \"bar\",\n";
+    $prompt .= "  \"encoding\": {\n";
+    $prompt .= "    \"x\": {\"field\": \"state\", \"type\": \"nominal\", \"axis\": {\"labelAngle\": -45}},\n";
+    $prompt .= "    \"y\": {\"field\": \"rate\", \"type\": \"quantitative\"}\n";
+    $prompt .= "  }\n";
+    $prompt .= "}\n";
+    $prompt .= "```\n";
+    $prompt .= "Only create charts when they add value. Don't chart simple row listings or single values.\n";
+    $prompt .= "When the x-axis has more than 6 categories or long labels, use \"labelAngle\": -45 on the axis to prevent overlap.\n";
+    $prompt .= "For axes with long text labels, set \"labelLimit\": 120 to allow more text before truncating.\n";
 
     return $prompt;
   }

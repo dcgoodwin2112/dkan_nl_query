@@ -40,6 +40,36 @@
     var newConvoBtn = widget.querySelector('.nl-query-new-conversation');
     var modelSelect = widget.querySelector('.nl-query-model-select');
 
+    var debugDetails = widget.querySelector('.nl-query-debug');
+    var debugLog = widget.querySelector('.nl-query-debug-log');
+    var sidebar = widget.querySelector('.nl-query-sidebar');
+    var sidebarList = widget.querySelector('.nl-query-sidebar-list');
+    var sidebarSearchInput = widget.querySelector('.nl-query-sidebar-search-input');
+    var sidebarFooter = widget.querySelector('.nl-query-sidebar-footer');
+
+    // Apply widget display settings.
+    if (settings.showModelSelector === false) {
+      var modelSelectorEl = widget.querySelector('.nl-query-model-selector');
+      if (modelSelectorEl) modelSelectorEl.hidden = true;
+    }
+    if (settings.showExamples === false) {
+      var examplesEl = widget.querySelector('.nl-query-examples');
+      if (examplesEl) examplesEl.hidden = true;
+    }
+    if (settings.showDebugPanel === false && debugDetails) {
+      debugDetails.hidden = true;
+    }
+
+    // Show sidebar for authenticated users with history enabled.
+    var historyEnabled = settings.userAuthenticated && settings.saveChatHistory !== false;
+    var datasetMap = {};
+    var cachedConversations = [];
+    if (historyEnabled && sidebar) {
+      sidebar.hidden = false;
+      widget.classList.add('nl-query-widget--with-sidebar');
+      loadSidebarConversations();
+    }
+
     var defaultPlaceholder = 'Ask a question about this data...';
     var followUpPlaceholder = 'Ask a follow-up...';
 
@@ -72,7 +102,9 @@
     var rawAnswer = '';
     var currentAnswerEl = null;
     var currentTableContainer = null;
+    var currentChartContainer = null;
     var currentAssistantBubble = null;
+    var currentConversationId = null;
 
     // If no dataset pre-configured, fetch dataset list for selector.
     if (!configuredDatasetId && datasetSelector) {
@@ -103,11 +135,17 @@
         history = [];
         rawAnswer = '';
         currentAnswerEl = null;
+        currentChartContainer = null;
         currentTableContainer = null;
         currentAssistantBubble = null;
+        currentConversationId = null;
         thread.innerHTML = '';
         errorEl.hidden = true;
         threadHeader.hidden = true;
+        if (newConvoBtn) newConvoBtn.hidden = true;
+        updateSidebarActiveState();
+        if (debugLog) debugLog.innerHTML = '';
+        if (debugDetails) debugDetails.open = false;
         input.placeholder = defaultPlaceholder;
         if (datasetSelect) {
           datasetSelect.disabled = false;
@@ -153,6 +191,9 @@
       if (threadHeader) {
         threadHeader.hidden = false;
       }
+      if (newConvoBtn) {
+        newConvoBtn.hidden = false;
+      }
 
       // Append user message bubble.
       var userBubble = document.createElement('div');
@@ -168,6 +209,11 @@
       answerEl.className = 'nl-query-answer';
       assistantBubble.appendChild(answerEl);
 
+      var chartContainer = document.createElement('div');
+      chartContainer.className = 'nl-query-chart-container';
+      chartContainer.hidden = true;
+      assistantBubble.appendChild(chartContainer);
+
       var tableContainer = document.createElement('div');
       tableContainer.className = 'nl-query-table-container';
       tableContainer.hidden = true;
@@ -178,6 +224,7 @@
       // Set current streaming targets.
       rawAnswer = '';
       currentAnswerEl = answerEl;
+      currentChartContainer = chartContainer;
       currentTableContainer = tableContainer;
       currentAssistantBubble = assistantBubble;
 
@@ -197,11 +244,15 @@
         ? baseEndpoint + '/' + encodeURIComponent(activeDatasetId)
         : baseEndpoint;
       var selectedModel = modelSelect ? modelSelect.value : '';
-      var body = new URLSearchParams({
+      var bodyParams = {
         question: question,
         history: JSON.stringify(history),
         model: selectedModel,
-      });
+      };
+      if (currentConversationId) {
+        bodyParams.conversation_id = currentConversationId;
+      }
+      var body = new URLSearchParams(bodyParams);
 
       fetch(url, {
         method: 'POST',
@@ -279,12 +330,57 @@
           }
           scrollToBottom();
           break;
+        case 'chart':
+          if (currentChartContainer && data.spec && typeof vegaEmbed !== 'undefined') {
+            currentChartContainer.hidden = false;
+            // Widen the bubble to give the chart more room.
+            if (currentAssistantBubble) {
+              currentAssistantBubble.classList.add('nl-query-message-has-chart');
+            }
+            var spec = data.spec;
+            // Recalculate after class change widens the bubble.
+            var bubbleWidth = currentAssistantBubble ? currentAssistantBubble.offsetWidth - 28 : 600;
+            if (!spec.width || spec.width === 'container') {
+              spec.width = bubbleWidth || 600;
+            }
+            if (spec.width > bubbleWidth && bubbleWidth > 0) {
+              spec.width = bubbleWidth;
+            }
+            if (!spec.height) {
+              spec.height = 400;
+            }
+            spec.autosize = {type: 'pad'};
+            if (!spec.padding) {
+              spec.padding = {left: 50, bottom: 40, right: 20, top: 10};
+            }
+            vegaEmbed(currentChartContainer, spec, {
+              actions: {export: true, source: false, compiled: false, editor: false},
+              renderer: 'svg',
+            }).catch(function (err) {
+              console.warn('Chart render error:', err);
+              currentChartContainer.hidden = true;
+            });
+          }
+          scrollToBottom();
+          break;
         case 'status':
           statusEl.hidden = false;
           statusText.textContent = data.message || '';
           if (rawAnswer.trim()) {
             rawAnswer += '\n\n';
           }
+          break;
+        case 'conversation':
+          if (data.id) {
+            currentConversationId = data.id;
+            // Refresh sidebar to show the new/updated conversation.
+            if (historyEnabled) {
+              loadSidebarConversations();
+            }
+          }
+          break;
+        case 'tool_call':
+          renderToolCall(data);
           break;
         case 'error':
           errorEl.textContent = data.message || 'An error occurred.';
@@ -353,6 +449,106 @@
       thread.scrollTop = thread.scrollHeight;
     }
 
+    function renderToolCall(data) {
+      if (!debugLog) return;
+
+      var entry = document.createElement('div');
+      entry.className = 'nl-query-debug-entry' + (data.is_error ? ' nl-query-debug-error' : '');
+
+      // Header: tool name, iteration badge, duration.
+      var header = document.createElement('div');
+      header.className = 'nl-query-debug-header';
+
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'nl-query-debug-name';
+      nameSpan.textContent = data.name;
+      header.appendChild(nameSpan);
+
+      var meta = document.createElement('span');
+      meta.className = 'nl-query-debug-meta';
+      var parts = [];
+      if (data.iteration) {
+        parts.push('step ' + data.iteration);
+      }
+      if (data.duration_ms != null) {
+        parts.push(data.duration_ms + 'ms');
+      }
+      meta.textContent = parts.join(' · ');
+      header.appendChild(meta);
+
+      entry.appendChild(header);
+
+      // Input args as formatted JSON.
+      if (data.input && Object.keys(data.input).length) {
+        var pre = document.createElement('pre');
+        pre.className = 'nl-query-debug-args';
+        pre.textContent = JSON.stringify(data.input, null, 2);
+        entry.appendChild(pre);
+
+        // For query tools, show equivalent API call.
+        if (data.name === 'query_datastore' || data.name === 'query_datastore_join') {
+          var apiCall = buildApiEquivalent(data.name, data.input);
+          if (apiCall) {
+            var apiEl = document.createElement('div');
+            apiEl.className = 'nl-query-debug-api';
+            var apiLabel = document.createElement('span');
+            apiLabel.className = 'nl-query-debug-api-label';
+            apiLabel.textContent = 'API equivalent:';
+            apiEl.appendChild(apiLabel);
+            var apiPre = document.createElement('pre');
+            apiPre.className = 'nl-query-debug-args';
+            apiPre.textContent = apiCall;
+            apiEl.appendChild(apiPre);
+            entry.appendChild(apiEl);
+          }
+        }
+      }
+
+      debugLog.appendChild(entry);
+    }
+
+    function buildApiEquivalent(toolName, input) {
+      var resourceId = input.resource_id || '';
+      var body = {};
+      if (input.columns) {
+        body.properties = input.columns.split(',').map(function (c) {
+          return { property: c.trim() };
+        });
+      }
+      if (input.conditions) {
+        try {
+          body.conditions = JSON.parse(input.conditions);
+        } catch (e) {
+          body.conditions = input.conditions;
+        }
+      }
+      if (input.sort_field) {
+        body.sorts = [{ property: input.sort_field, order: input.sort_direction || 'asc' }];
+      }
+      if (input.limit) body.limit = input.limit;
+      if (input.offset) body.offset = input.offset;
+      if (input.expressions) {
+        try {
+          body.properties = body.properties || [];
+          JSON.parse(input.expressions).forEach(function (expr) {
+            body.properties.push(expr);
+          });
+        } catch (e) {}
+      }
+      if (input.groupings) {
+        body.groupings = input.groupings.split(',').map(function (c) {
+          return { property: c.trim() };
+        });
+      }
+      if (toolName === 'query_datastore_join' && input.join_resource_id) {
+        body.joins = [{
+          resource_id: input.join_resource_id,
+          on: input.join_on,
+        }];
+      }
+      return 'POST /api/1/datastore/query/' + resourceId + '\n' + JSON.stringify(body, null, 2);
+    }
+
     function renderTable(data, container) {
       var results = data.results || [];
       if (results.length === 0) return;
@@ -362,6 +558,56 @@
 
       var sortCol = null;
       var sortAsc = true;
+
+      // Build summary bar (always visible).
+      var summaryBar = document.createElement('div');
+      summaryBar.className = 'nl-query-table-summary';
+
+      var countText = results.length + ' row' + (results.length !== 1 ? 's' : '');
+      if (data.total_rows != null && data.total_rows > results.length) {
+        countText += ' of ' + data.total_rows + ' total';
+      }
+      var metaSpan = document.createElement('span');
+      metaSpan.className = 'nl-query-table-meta';
+      metaSpan.textContent = countText;
+      summaryBar.appendChild(metaSpan);
+
+      var actions = document.createElement('span');
+      actions.className = 'nl-query-table-actions';
+
+      var toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'nl-query-table-toggle';
+      toggleBtn.textContent = 'Show table';
+      actions.appendChild(toggleBtn);
+
+      var csvBtn = document.createElement('button');
+      csvBtn.type = 'button';
+      csvBtn.className = 'nl-query-csv-btn';
+      csvBtn.textContent = 'Download CSV';
+      csvBtn.addEventListener('click', function () {
+        downloadCsv(columns, results);
+      });
+      actions.appendChild(csvBtn);
+
+      summaryBar.appendChild(actions);
+      container.appendChild(summaryBar);
+
+      // Build table wrapper (collapsed by default).
+      var tableWrapper = document.createElement('div');
+      tableWrapper.className = 'nl-query-table-wrapper';
+      tableWrapper.hidden = true;
+      container.appendChild(tableWrapper);
+
+      toggleBtn.addEventListener('click', function () {
+        var isHidden = tableWrapper.hidden;
+        tableWrapper.hidden = !isHidden;
+        toggleBtn.textContent = isHidden ? 'Hide table' : 'Show table';
+        if (isHidden && !tableWrapper.hasChildNodes()) {
+          buildTable(results);
+        }
+        scrollToBottom();
+      });
 
       function buildTable(rows) {
         var html = '<table class="nl-query-table"><thead><tr>';
@@ -384,22 +630,10 @@
 
         html += '</tbody></table>';
 
-        // Meta row with count and CSV export.
-        var meta = '<div class="nl-query-table-footer">';
-        meta += '<span class="nl-query-table-meta">';
-        meta += results.length + ' row' + (results.length !== 1 ? 's' : '');
-        if (data.total_rows != null && data.total_rows > results.length) {
-          meta += ' of ' + data.total_rows + ' total';
-        }
-        meta += '</span>';
-        meta += '<button type="button" class="nl-query-csv-btn">Download CSV</button>';
-        meta += '</div>';
-        html += meta;
-
-        container.innerHTML = html;
+        tableWrapper.innerHTML = html;
 
         // Sort handlers.
-        container.querySelectorAll('th').forEach(function (th) {
+        tableWrapper.querySelectorAll('th').forEach(function (th) {
           th.addEventListener('click', function () {
             var col = th.dataset.col;
             if (sortCol === col) {
@@ -421,17 +655,7 @@
             buildTable(sorted);
           });
         });
-
-        // CSV export handler.
-        var csvBtn = container.querySelector('.nl-query-csv-btn');
-        if (csvBtn) {
-          csvBtn.addEventListener('click', function () {
-            downloadCsv(columns, rows);
-          });
-        }
       }
-
-      buildTable(results);
     }
 
     function downloadCsv(columns, rows) {
@@ -457,6 +681,260 @@
         return '"' + str.replace(/"/g, '""') + '"';
       }
       return str;
+    }
+
+    // --- Sidebar / History ---
+
+    // Build dataset ID → title map for sidebar labels.
+    function fetchDatasetMap() {
+      fetch('/api/nl-query-datasets')
+        .then(function (r) { return r.json(); })
+        .then(function (datasets) {
+          datasets.forEach(function (ds) {
+            datasetMap[ds.identifier] = ds.title;
+          });
+          // Re-render sidebar entries with dataset labels.
+          renderSidebarList(cachedConversations);
+        });
+    }
+
+    function loadSidebarConversations() {
+      if (!sidebarList) return;
+      sidebarList.innerHTML = '<div class="nl-query-sidebar-loading">Loading...</div>';
+      fetch('/api/nl-query/conversations')
+        .then(function (r) { return r.json(); })
+        .then(function (conversations) {
+          cachedConversations = conversations;
+          renderSidebarList(conversations);
+          // Fetch dataset titles for labels (non-blocking).
+          if (!Object.keys(datasetMap).length) {
+            fetchDatasetMap();
+          }
+        })
+        .catch(function () {
+          sidebarList.innerHTML = '<div class="nl-query-sidebar-empty">Failed to load history.</div>';
+        });
+    }
+
+    function renderSidebarList(conversations, filter) {
+      if (!sidebarList) return;
+      var filtered = conversations;
+      if (filter) {
+        var lower = filter.toLowerCase();
+        filtered = conversations.filter(function (c) {
+          return c.title.toLowerCase().indexOf(lower) !== -1;
+        });
+      }
+      sidebarList.innerHTML = '';
+      if (!filtered.length) {
+        sidebarList.innerHTML = '<div class="nl-query-sidebar-empty">' +
+          (filter ? 'No matching conversations.' : 'No saved conversations.') + '</div>';
+      } else {
+        filtered.forEach(function (conv) {
+          sidebarList.appendChild(buildSidebarEntry(conv));
+        });
+      }
+      // Update count.
+      if (sidebarFooter) {
+        sidebarFooter.textContent = conversations.length + ' conversation' +
+          (conversations.length !== 1 ? 's' : '');
+      }
+    }
+
+    // Search filtering.
+    if (sidebarSearchInput) {
+      sidebarSearchInput.addEventListener('input', function () {
+        renderSidebarList(cachedConversations, sidebarSearchInput.value.trim());
+      });
+    }
+
+    function updateSidebarActiveState() {
+      if (!sidebarList) return;
+      sidebarList.querySelectorAll('.nl-query-sidebar-entry').forEach(function (el) {
+        var isActive = currentConversationId && el.dataset.id == currentConversationId;
+        el.classList.toggle('nl-query-sidebar-entry--active', isActive);
+      });
+    }
+
+    function buildSidebarEntry(conv) {
+      var entry = document.createElement('div');
+      var classes = 'nl-query-sidebar-entry';
+      if (conv.pinned) classes += ' nl-query-sidebar-entry--pinned';
+      if (currentConversationId && conv.id == currentConversationId) classes += ' nl-query-sidebar-entry--active';
+      entry.className = classes;
+      entry.dataset.id = conv.id;
+
+      var title = document.createElement('div');
+      title.className = 'nl-query-sidebar-title';
+      title.textContent = conv.title;
+      entry.appendChild(title);
+
+      // Dataset label.
+      if (conv.dataset_id) {
+        var dsLabel = document.createElement('div');
+        dsLabel.className = 'nl-query-sidebar-dataset';
+        dsLabel.textContent = datasetMap[conv.dataset_id] || conv.dataset_id;
+        entry.appendChild(dsLabel);
+      }
+
+      var meta = document.createElement('div');
+      meta.className = 'nl-query-sidebar-meta';
+
+      var date = new Date(conv.changed * 1000);
+      var dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      var dateSpan = document.createElement('span');
+      dateSpan.textContent = dateStr;
+      meta.appendChild(dateSpan);
+
+      var actions = document.createElement('span');
+      actions.className = 'nl-query-sidebar-actions';
+
+      var pinBtn = document.createElement('button');
+      pinBtn.type = 'button';
+      pinBtn.className = 'nl-query-sidebar-pin';
+      pinBtn.textContent = conv.pinned ? '\u2605' : '\u2606';
+      pinBtn.title = conv.pinned ? 'Unpin' : 'Pin';
+      pinBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        fetch('/api/nl-query/conversations/' + conv.id + '/pin', { method: 'PATCH' })
+          .then(function (r) { return r.json(); })
+          .then(function (result) {
+            conv.pinned = result.pinned;
+            pinBtn.textContent = result.pinned ? '\u2605' : '\u2606';
+            pinBtn.title = result.pinned ? 'Unpin' : 'Pin';
+            entry.classList.toggle('nl-query-sidebar-entry--pinned', result.pinned);
+          });
+      });
+      actions.appendChild(pinBtn);
+
+      var delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'nl-query-sidebar-delete';
+      delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+      delBtn.title = 'Delete';
+      delBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!confirm('Delete this conversation?')) return;
+        fetch('/api/nl-query/conversations/' + conv.id, { method: 'DELETE' })
+          .then(function () {
+            cachedConversations = cachedConversations.filter(function (c) { return c.id !== conv.id; });
+            entry.remove();
+            if (currentConversationId === conv.id) {
+              currentConversationId = null;
+            }
+            if (sidebarFooter) {
+              sidebarFooter.textContent = cachedConversations.length + ' conversation' +
+                (cachedConversations.length !== 1 ? 's' : '');
+            }
+          });
+      });
+      actions.appendChild(delBtn);
+
+      meta.appendChild(actions);
+      entry.appendChild(meta);
+
+      // Click entry to load conversation.
+      entry.addEventListener('click', function () {
+        loadConversation(conv.id);
+      });
+
+      return entry;
+    }
+
+    function loadConversation(id) {
+      fetch('/api/nl-query/conversations/' + id)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) return;
+
+          // Reset state.
+          history = [];
+          rawAnswer = '';
+          thread.innerHTML = '';
+          errorEl.hidden = true;
+          if (debugLog) debugLog.innerHTML = '';
+          currentConversationId = id;
+
+          if (threadHeader) threadHeader.hidden = false;
+          if (newConvoBtn) newConvoBtn.hidden = false;
+          input.placeholder = followUpPlaceholder;
+          if (datasetSelect) datasetSelect.disabled = true;
+
+          updateSidebarActiveState();
+
+          // Rebuild thread from saved messages.
+          data.messages.forEach(function (msg) {
+            if (msg.role === 'user') {
+              var userBubble = document.createElement('div');
+              userBubble.className = 'nl-query-message nl-query-message-user';
+              userBubble.textContent = msg.content;
+              thread.appendChild(userBubble);
+              history.push({ role: 'user', content: msg.content });
+            }
+            else if (msg.role === 'assistant') {
+              var bubble = document.createElement('div');
+              bubble.className = 'nl-query-message nl-query-message-assistant';
+
+              var answerEl = document.createElement('div');
+              answerEl.className = 'nl-query-answer';
+              if (msg.content && typeof marked !== 'undefined') {
+                answerEl.innerHTML = marked.parse(msg.content);
+              } else {
+                answerEl.textContent = msg.content || '';
+              }
+              bubble.appendChild(answerEl);
+
+              // Restore chart.
+              if (msg.chart_spec && typeof vegaEmbed !== 'undefined') {
+                bubble.classList.add('nl-query-message-has-chart');
+                var chartEl = document.createElement('div');
+                chartEl.className = 'nl-query-chart-container';
+                bubble.appendChild(chartEl);
+                var spec = msg.chart_spec;
+                var bubbleWidth = 870;
+                if (!spec.width || spec.width === 'container') {
+                  spec.width = bubbleWidth;
+                }
+                if (!spec.height) spec.height = 400;
+                spec.autosize = {type: 'pad'};
+                if (!spec.padding) {
+                  spec.padding = {left: 50, bottom: 40, right: 20, top: 10};
+                }
+                vegaEmbed(chartEl, spec, {
+                  actions: {export: true, source: false, compiled: false, editor: false},
+                  renderer: 'svg',
+                }).catch(function () {
+                  chartEl.hidden = true;
+                });
+              }
+
+              // Restore table.
+              if (msg.table_data) {
+                var tableEl = document.createElement('div');
+                tableEl.className = 'nl-query-table-container';
+                bubble.appendChild(tableEl);
+                renderTable(msg.table_data, tableEl);
+              }
+
+              // Restore tool calls to debug panel.
+              if (msg.tool_calls && debugLog) {
+                msg.tool_calls.forEach(function (tc) {
+                  renderToolCall(tc);
+                });
+              }
+
+              thread.appendChild(bubble);
+              history.push({ role: 'assistant', content: msg.content || '' });
+            }
+          });
+
+          // Trim history.
+          while (history.length > 10) {
+            history.shift();
+          }
+
+          scrollToBottom();
+        });
     }
 
     function escapeHtml(str) {

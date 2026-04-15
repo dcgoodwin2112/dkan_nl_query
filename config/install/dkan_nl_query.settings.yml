@@ -1,5 +1,9 @@
-provider: 'anthropic'
 anthropic_api_key: ''
 openai_api_key: ''
-model: 'claude-sonnet-4-20250514'
+model: 'claude-haiku-4-5'
 max_tokens: 4096
+max_iterations: 10
+show_model_selector: true
+show_examples: true
+show_debug_panel: false
+save_chat_history: true

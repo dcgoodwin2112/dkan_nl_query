@@ -21,6 +21,15 @@ class ToolExecutor {
    * Execute a tool call and return the result.
    */
   public function execute(string $toolName, array $arguments): array {
+    // Resolve resource_id from direct ID or dataset title.
+    if (isset($arguments['resource_id'])) {
+      $resolved = $this->resolveResourceId($arguments['resource_id']);
+      if ($resolved === NULL) {
+        return ['error' => "Could not resolve resource: {$arguments['resource_id']}"];
+      }
+      $arguments['resource_id'] = $resolved;
+    }
+
     return match ($toolName) {
       'query_datastore' => $this->datastoreTools->queryDatastore(
         resourceId: $arguments['resource_id'],
@@ -73,8 +82,123 @@ class ToolExecutor {
       'list_distributions' => $this->metastoreTools->listDistributions(
         datasetId: $arguments['dataset_id'],
       ),
+      'find_dataset_resources' => $this->findDatasetResources(
+        $arguments['title'] ?? '',
+      ),
+      // create_chart is handled by NlQueryService (emits SSE event).
+      'create_chart' => ['status' => 'chart_rendered'],
       default => ['error' => "Unknown tool: $toolName"],
     };
+  }
+
+  /**
+   * Resolve a resource_id from either a direct ID or dataset title.
+   *
+   * Accepts identifier__version format directly, or a dataset title
+   * which is resolved to the first imported resource_id. If a direct
+   * resource_id fails validation, falls back to fuzzy matching against
+   * all known resources (handles LLM hex string corruption).
+   */
+  protected function resolveResourceId(string $input): ?string {
+    // If it looks like a resource_id, validate it exists.
+    if (str_contains($input, '__')) {
+      $status = $this->datastoreTools->getImportStatus($input);
+      if (($status['status'] ?? '') === 'done') {
+        return $input;
+      }
+
+      // ID is corrupted — find the closest match by version suffix.
+      $version = explode('__', $input)[1] ?? '';
+      if ($version) {
+        $match = $this->findResourceByVersion($version);
+        if ($match) {
+          return $match;
+        }
+      }
+
+      // Try matching by identifier prefix (first 6 chars).
+      $prefix = substr(explode('__', $input)[0], 0, 6);
+      $match = $this->findResourceByPrefix($prefix);
+      if ($match) {
+        return $match;
+      }
+    }
+
+    // Try as dataset title lookup.
+    $result = $this->findDatasetResources($input);
+    if (!isset($result['error'])) {
+      foreach ($result['distributions'] ?? [] as $dist) {
+        if (!empty($dist['resource_id'])) {
+          return $dist['resource_id'];
+        }
+      }
+    }
+
+    return NULL;
+  }
+
+  /**
+   * Find a resource_id by matching its version suffix.
+   */
+  protected function findResourceByVersion(string $version): ?string {
+    $datasets = $this->metastoreTools->listDatasets(0, 50);
+    foreach ($datasets['datasets'] ?? [] as $ds) {
+      $dists = $this->metastoreTools->listDistributions($ds['identifier']);
+      foreach ($dists['distributions'] ?? [] as $dist) {
+        $rid = $dist['resource_id'] ?? '';
+        if ($rid && str_ends_with($rid, "__$version")) {
+          $status = $this->datastoreTools->getImportStatus($rid);
+          if (($status['status'] ?? '') === 'done') {
+            return $rid;
+          }
+        }
+      }
+    }
+    return NULL;
+  }
+
+  /**
+   * Find a resource_id by matching its identifier prefix.
+   */
+  protected function findResourceByPrefix(string $prefix): ?string {
+    $datasets = $this->metastoreTools->listDatasets(0, 50);
+    foreach ($datasets['datasets'] ?? [] as $ds) {
+      $dists = $this->metastoreTools->listDistributions($ds['identifier']);
+      foreach ($dists['distributions'] ?? [] as $dist) {
+        $rid = $dist['resource_id'] ?? '';
+        if ($rid && str_starts_with($rid, $prefix)) {
+          $status = $this->datastoreTools->getImportStatus($rid);
+          if (($status['status'] ?? '') === 'done') {
+            return $rid;
+          }
+        }
+      }
+    }
+    return NULL;
+  }
+
+  /**
+   * Find a dataset by title and return its resources.
+   */
+  protected function findDatasetResources(string $title): array {
+    $title = strtolower(trim($title));
+    if ($title === '') {
+      return ['error' => 'Title search term is required.'];
+    }
+
+    $datasets = $this->metastoreTools->listDatasets(0, 50);
+    foreach ($datasets['datasets'] ?? [] as $ds) {
+      if (str_contains(strtolower($ds['title'] ?? ''), $title)) {
+        $dists = $this->metastoreTools->listDistributions($ds['identifier']);
+        return [
+          'dataset_id' => $ds['identifier'],
+          'title' => $ds['title'],
+          'distributions' => $dists['distributions'] ?? [],
+        ];
+      }
+    }
+
+    return ['error' => "No dataset found matching: $title"];
   }
 
   /**
@@ -108,7 +232,7 @@ class ToolExecutor {
           'properties' => [
             'resource_id' => [
               'type' => 'string',
-              'description' => 'Resource ID in identifier__version format (get from list_distributions)',
+              'description' => 'Resource ID (identifier__version format) OR a dataset title for automatic lookup. Examples: "abc123__1773329007" or "Shark Tagging".',
             ],
             'columns' => [
               'type' => 'string',
@@ -155,7 +279,7 @@ class ToolExecutor {
           'properties' => [
             'resource_id' => [
               'type' => 'string',
-              'description' => 'Primary resource ID (identifier__version format)',
+              'description' => 'Resource ID (identifier__version format) OR a dataset title for automatic lookup.',
             ],
             'join_resource_id' => [
               'type' => 'string',
@@ -208,7 +332,7 @@ class ToolExecutor {
           'properties' => [
             'resource_id' => [
               'type' => 'string',
-              'description' => 'Resource ID in identifier__version format',
+              'description' => 'Resource ID (identifier__version format) OR a dataset title for automatic lookup.',
             ],
           ],
           'required' => ['resource_id'],
@@ -222,7 +346,7 @@ class ToolExecutor {
           'properties' => [
             'resource_id' => [
               'type' => 'string',
-              'description' => 'Resource ID in identifier__version format',
+              'description' => 'Resource ID (identifier__version format) OR a dataset title for automatic lookup.',
             ],
             'columns' => [
               'type' => 'string',
@@ -264,17 +388,17 @@ class ToolExecutor {
         ],
       ],
       [
-        'name' => 'get_import_status',
-        'description' => 'Check if a resource has been imported and is ready to query. Status: "done", "pending", or "not_imported".',
+        'name' => 'create_chart',
+        'description' => 'Render an interactive chart from query results. Pass a Vega-Lite v5 specification with data.values containing the results. Use after query_datastore when visualization would help. Good for: comparisons (bar), trends (line), distributions (histogram), proportions (arc), correlations (point).',
         'input_schema' => [
           'type' => 'object',
           'properties' => [
-            'resource_id' => [
-              'type' => 'string',
-              'description' => 'Resource ID in identifier__version format',
+            'spec' => [
+              'type' => 'object',
+              'description' => 'Vega-Lite v5 spec. Example: {"$schema":"https://vega.github.io/schema/vega-lite/v5.json","data":{"values":[{"x":"A","y":10}]},"mark":"bar","encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}',
             ],
           ],
-          'required' => ['resource_id'],
+          'required' => ['spec'],
         ],
       ],
     ];
@@ -326,7 +450,7 @@ class ToolExecutor {
       ],
       [
         'name' => 'list_distributions',
-        'description' => 'Get distributions (data files) for a dataset. Returns resource_id (identifier__version format) needed for all datastore tools.',
+        'description' => 'Get distributions (data files) for a dataset by UUID. Returns resource_id needed for datastore tools.',
         'input_schema' => [
           'type' => 'object',
           'properties' => [
@@ -336,6 +460,20 @@ class ToolExecutor {
             ],
           ],
           'required' => ['dataset_id'],
+        ],
+      ],
+      [
+        'name' => 'find_dataset_resources',
+        'description' => 'Find a dataset by title and get its resource_ids. Use this instead of list_distributions when you know the dataset title — avoids needing to type the UUID. Returns dataset_id, title, and distributions with resource_ids.',
+        'input_schema' => [
+          'type' => 'object',
+          'properties' => [
+            'title' => [
+              'type' => 'string',
+              'description' => 'Dataset title or partial title to search for (case-insensitive)',
+            ],
+          ],
+          'required' => ['title'],
         ],
       ],
     ];

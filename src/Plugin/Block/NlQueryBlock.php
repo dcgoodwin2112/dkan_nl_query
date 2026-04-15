@@ -23,10 +23,12 @@ class NlQueryBlock extends BlockBase implements ContainerFactoryPluginInterface 
    * Available models grouped by provider.
    */
   private const MODELS = [
-    ['id' => 'claude-sonnet-4-20250514', 'label' => 'Claude Sonnet 4', 'provider' => 'Anthropic'],
-    ['id' => 'claude-haiku-4-5-20251001', 'label' => 'Claude Haiku 4.5', 'provider' => 'Anthropic'],
-    ['id' => 'gpt-4o', 'label' => 'GPT-4o', 'provider' => 'OpenAI'],
-    ['id' => 'gpt-4o-mini', 'label' => 'GPT-4o Mini', 'provider' => 'OpenAI'],
+    ['id' => 'claude-opus-4-6', 'label' => 'Claude Opus 4.6', 'provider' => 'Anthropic'],
+    ['id' => 'claude-sonnet-4-6', 'label' => 'Claude Sonnet 4.6', 'provider' => 'Anthropic'],
+    ['id' => 'claude-haiku-4-5', 'label' => 'Claude Haiku 4.5', 'provider' => 'Anthropic'],
+    ['id' => 'gpt-5.4', 'label' => 'GPT-5.4', 'provider' => 'OpenAI'],
+    ['id' => 'gpt-5.4-mini-2026-03-17', 'label' => 'GPT-5.4 Mini', 'provider' => 'OpenAI'],
+    ['id' => 'gpt-5.4-nano-2026-03-17', 'label' => 'GPT-5.4 Nano', 'provider' => 'OpenAI'],
   ];
 
   /**
@@ -91,7 +93,12 @@ class NlQueryBlock extends BlockBase implements ContainerFactoryPluginInterface 
             'datasetId' => $datasetId,
             'endpoint' => '/api/nl-query',
             'models' => self::MODELS,
-            'defaultModel' => $config->get('model') ?: 'claude-sonnet-4-20250514',
+            'defaultModel' => $config->get('model') ?: 'claude-haiku-4-5',
+            'showModelSelector' => $config->get('show_model_selector') ?? TRUE,
+            'showExamples' => $config->get('show_examples') ?? TRUE,
+            'showDebugPanel' => $config->get('show_debug_panel') ?? FALSE,
+            'saveChatHistory' => $config->get('save_chat_history') ?? TRUE,
+            'userAuthenticated' => \Drupal::currentUser()->isAuthenticated(),
           ],
         ],
       ],

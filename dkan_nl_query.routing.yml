@@ -23,6 +23,41 @@ dkan_nl_query.datasets:
   requirements:
     _permission: 'access content'
 
+dkan_nl_query.conversations_list:
+  path: '/api/nl-query/conversations'
+  defaults:
+    _controller: 'dkan_nl_query.history_controller:list'
+  methods: [GET]
+  requirements:
+    _permission: 'manage own nl query conversations'
+
+dkan_nl_query.conversation_load:
+  path: '/api/nl-query/conversations/{id}'
+  defaults:
+    _controller: 'dkan_nl_query.history_controller:load'
+  methods: [GET]
+  requirements:
+    _permission: 'manage own nl query conversations'
+    id: '\d+'
+
+dkan_nl_query.conversation_delete:
+  path: '/api/nl-query/conversations/{id}'
+  defaults:
+    _controller: 'dkan_nl_query.history_controller:delete'
+  methods: [DELETE]
+  requirements:
+    _permission: 'manage own nl query conversations'
+    id: '\d+'
+
+dkan_nl_query.conversation_pin:
+  path: '/api/nl-query/conversations/{id}/pin'
+  defaults:
+    _controller: 'dkan_nl_query.history_controller:togglePin'
+  methods: [PATCH]
+  requirements:
+    _permission: 'manage own nl query conversations'
+    id: '\d+'
+
 dkan_nl_query.settings:
   path: '/admin/config/dkan/nl-query'
   defaults:

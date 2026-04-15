@@ -2,9 +2,6 @@ dkan_nl_query.settings:
   type: config_object
   label: 'DKAN NL Query settings'
   mapping:
-    provider:
-      type: string
-      label: 'Default LLM provider'
     anthropic_api_key:
       type: string
       label: 'Anthropic API key'
@@ -17,3 +14,18 @@ dkan_nl_query.settings:
     max_tokens:
       type: integer
       label: 'Max tokens'
+    max_iterations:
+      type: integer
+      label: 'Max agentic iterations'
+    show_model_selector:
+      type: boolean
+      label: 'Show model selector in widget'
+    show_examples:
+      type: boolean
+      label: 'Show example question buttons'
+    show_debug_panel:
+      type: boolean
+      label: 'Show tool calls debug panel'
+    save_chat_history:
+      type: boolean
+      label: 'Save chat history'
