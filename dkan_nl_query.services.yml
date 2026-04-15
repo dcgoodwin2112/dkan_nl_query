@@ -27,8 +27,17 @@ services:
       - '@dkan_nl_query.llm_provider_factory'
       - '@logger.factory'
 
+  dkan_nl_query.history_controller:
+    class: Drupal\dkan_nl_query\Controller\NlQueryHistoryController
+    arguments:
+      - '@entity_type.manager'
+      - '@current_user'
+
   dkan_nl_query.controller:
     class: Drupal\dkan_nl_query\Controller\NlQueryController
     arguments:
       - '@dkan_nl_query.nl_query'
       - '@dkan_nl_query.schema_context_builder'
+      - '@entity_type.manager'
+      - '@current_user'
+      - '@config.factory'

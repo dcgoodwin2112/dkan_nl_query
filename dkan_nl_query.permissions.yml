@@ -1,0 +1,8 @@
+manage own nl query conversations:
+  title: 'Manage own NL Query conversations'
+  description: 'Save, view, pin, and delete own chat conversations.'
+
+administer nl query conversations:
+  title: 'Administer NL Query conversations'
+  description: 'View and manage all user conversations.'
+  restrict access: true

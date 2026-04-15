@@ -1,6 +1,6 @@
 # DKAN Natural Language Query
 
-Drupal module that adds a chat-style natural language interface for querying DKAN datasets. Users type questions in plain English, an LLM translates them into structured datastore queries via dkan_mcp tool services, and results stream back as interactive tables with AI-generated summaries. Supports Anthropic Claude and OpenAI GPT models.
+Drupal module that adds a chat-style natural language interface for querying DKAN datasets. Users type questions in plain English, an LLM translates them into structured datastore queries via dkan_mcp tool services, and results stream back as interactive tables, Vega-Lite charts, and AI-generated summaries. Supports Anthropic Claude and OpenAI GPT models.
 
 ## Requirements
 
@@ -27,15 +27,31 @@ drush en dkan_nl_query
 
 ## Configuration
 
-Admin form at `/admin/config/dkan/nl-query`:
+Admin form at `/admin/config/dkan/nl-query`, organized into three sections:
+
+### API Keys
 
 | Setting | Description | Default |
 |---|---|---|
-| `provider` | Default LLM provider (Anthropic or OpenAI) | `anthropic` |
-| `anthropic_api_key` | Anthropic API key (max 256 chars) | — |
-| `openai_api_key` | OpenAI API key (max 256 chars) | — |
-| `model` | Default model ID | `claude-sonnet-4-20250514` |
+| `anthropic_api_key` | Anthropic API key | — |
+| `openai_api_key` | OpenAI API key | — |
+
+### Model & Generation
+
+| Setting | Description | Default |
+|---|---|---|
+| `model` | Default model ID | `claude-haiku-4-5` |
 | `max_tokens` | Max tokens per LLM response (256–8192) | `4096` |
+| `max_iterations` | Max agentic loop iterations per query (1–20) | `10` |
+
+### Widget Display
+
+| Setting | Description | Default |
+|---|---|---|
+| `show_model_selector` | Allow users to choose a model in the widget | `true` |
+| `show_examples` | Display example question buttons | `true` |
+| `show_debug_panel` | Show collapsible tool calls debug panel | `false` |
+| `save_chat_history` | Save conversations for authenticated users | `true` |
 
 ## Usage
 
@@ -62,9 +78,30 @@ Add the **DKAN Natural Language Query** block to any page via Drupal's block lay
 - Type a question and press Enter (Shift+Enter for newline)
 - Previous Q&A pairs stay visible in the thread as chat bubbles
 - Each response shows the model used and has a copy button
-- Data tables are interactive: click column headers to sort, use "Download CSV" to export
+- **Charts**: Vega-Lite visualizations rendered inline when the LLM determines a chart would help
+- **Data tables**: Collapsed by default with a summary bar showing row count, "Show table" toggle, and CSV export
 - Dataset selector locks after first query; click "New conversation" to reset
 - Switch models between turns using the model selector
+
+### Chat History
+
+Authenticated users get persistent chat history stored as Drupal entities:
+
+- **Sidebar**: Always-visible panel showing saved conversations with search, dataset labels, and pinned conversations on top
+- **Full state recall**: Loading a conversation restores text, charts, tables, and debug panel entries
+- **Pin/unpin**: Star icon on each conversation to pin important chats to the top
+- **Delete**: Trash icon with confirmation prompt
+- **Auto-save**: Conversations are saved automatically after each exchange
+
+Requires the `manage own nl query conversations` permission.
+
+### Debug Panel
+
+When enabled (`show_debug_panel`), a collapsible "Tool calls" panel appears below the chat showing:
+
+- Tool name, agentic loop step number, and execution duration
+- Full input arguments as formatted JSON
+- For `query_datastore` calls: the equivalent DKAN REST API request (copy-pasteable)
 
 ### Example Questions
 
@@ -76,21 +113,35 @@ Add the **DKAN Natural Language Query** block to any page via Drupal's block lay
 
 ## API Endpoints
 
+### Query Endpoints
+
 | Method | Path | Parameters | Response |
 |---|---|---|---|
-| POST | `/api/nl-query/{dataset_id}` | `question` (required), `history` (JSON), `model` | SSE stream |
-| POST | `/api/nl-query` | `question` (required), `history` (JSON), `model` | SSE stream (cross-dataset) |
+| POST | `/api/nl-query/{dataset_id}` | `question` (required), `history` (JSON), `model`, `conversation_id` | SSE stream |
+| POST | `/api/nl-query` | `question` (required), `history` (JSON), `model`, `conversation_id` | SSE stream (cross-dataset) |
 | GET | `/api/nl-query-datasets` | — | JSON array of datasets |
 
-All endpoints require `access content` permission. The settings form requires `administer site configuration`.
+All query endpoints require `access content` permission.
 
-**SSE event types:**
+### History Endpoints
+
+| Method | Path | Permission | Response |
+|---|---|---|---|
+| GET | `/api/nl-query/conversations` | `manage own nl query conversations` | JSON array of user's conversations |
+| GET | `/api/nl-query/conversations/{id}` | `manage own nl query conversations` | JSON conversation with all messages |
+| DELETE | `/api/nl-query/conversations/{id}` | `manage own nl query conversations` | `{status: "deleted"}` |
+| PATCH | `/api/nl-query/conversations/{id}/pin` | `manage own nl query conversations` | `{pinned: true/false}` |
+
+### SSE Event Types
 
 | Event | Data | Description |
 |---|---|---|
 | `status` | `{message}` | Progress indicator ("Thinking...", "Querying data: query_datastore...") |
 | `token` | `{text}` | Streaming text token from the LLM |
-| `data` | `{results, total_rows, ...}` | Query results for interactive table rendering |
+| `data` | `{results, total_rows}` | Query results for table rendering |
+| `chart` | `{spec}` | Vega-Lite v5 spec for inline chart |
+| `tool_call` | `{name, input, duration_ms, iteration, is_error}` | Debug info for tool calls panel |
+| `conversation` | `{id, title}` | Conversation entity ID after save |
 | `error` | `{message}` | Error message |
 | `done` | `{}` | Stream complete |
 
@@ -98,6 +149,7 @@ All endpoints require `access content` permission. The settings form requires `a
 
 ```
 NlQueryController (SSE endpoint)
+  ├─ Saves NlQueryConversation + NlQueryMessage entities
   └─ NlQueryService (agentic loop)
        ├─ SchemaContextBuilder (schema + system prompt)
        │    ├─ MetastoreTools::getDataset()
@@ -119,18 +171,30 @@ NlQueryController (SSE endpoint)
             ├─ DatastoreTools::searchColumns()
             ├─ MetastoreTools::listDatasets()
             ├─ MetastoreTools::listDistributions()
-            └─ SearchTools::searchDatasets()
+            ├─ SearchTools::searchDatasets()
+            └─ create_chart → emits Vega-Lite spec to frontend
+
+NlQueryHistoryController (REST API)
+  └─ CRUD for NlQueryConversation + NlQueryMessage entities
 ```
+
+### Entities
+
+| Entity Type | Table | Purpose |
+|---|---|---|
+| `nl_query_conversation` | `nl_query_conversations` | Conversation metadata: title, user, dataset, pinned status |
+| `nl_query_message` | `nl_query_messages` | Individual messages with role, content, chart spec, table data, tool calls |
 
 ### Agentic Loop
 
-The `NlQueryService` runs an iterative loop (max 5 rounds):
+The `NlQueryService` runs an iterative loop (max configurable, default 10 rounds):
 
 1. Build system prompt with schema context (cached 1 hour)
 2. Send question + conversation history to LLM with tool definitions
 3. Stream text tokens to client as SSE events
 4. If LLM returns `tool_use`: execute the tool via `ToolExecutor`, send results back to LLM, continue
 5. If LLM returns `end_turn`: done
+6. Return collected answer, chart spec, table data, and tool calls for persistence
 
 Each LLM call is streamed — text appears token-by-token in the browser while the LLM generates.
 
@@ -150,7 +214,7 @@ This module consumes dkan_mcp tool classes as **Drupal services via dependency i
 
 dkan_mcp methods are exposed to the LLM as callable tools. The LLM sees tool definitions with names, descriptions, and JSON Schema input parameters. When it decides to call a tool, `ToolExecutor` routes the call to the correct dkan_mcp method.
 
-**Query mode tools** (single-dataset, 6 tools):
+**Query mode tools** (single-dataset, 7 tools):
 
 | LLM Tool Name | dkan_mcp Method | Purpose |
 |---|---|---|
@@ -159,15 +223,16 @@ dkan_mcp methods are exposed to the LLM as callable tools. The LLM sees tool def
 | `get_datastore_schema` | `DatastoreTools::getDatastoreSchema()` | Discover columns and types |
 | `get_datastore_stats` | `DatastoreTools::getDatastoreStats()` | Column statistics (distinct, null, min/max) |
 | `search_columns` | `DatastoreTools::searchColumns()` | Find columns by name across all resources |
-| `get_import_status` | `DatastoreTools::getImportStatus()` | Check if a resource is queryable |
+| `create_chart` | (frontend) | Render Vega-Lite visualization from query results |
 
-**Discovery mode tools** (cross-dataset, adds 3 more):
+**Discovery mode tools** (cross-dataset, adds 4 more):
 
 | LLM Tool Name | dkan_mcp Method | Purpose |
 |---|---|---|
 | `search_datasets` | `SearchTools::searchDatasets()` | Find datasets by keyword |
 | `list_datasets` | `MetastoreTools::listDatasets()` | Browse all datasets |
 | `list_distributions` | `MetastoreTools::listDistributions()` | Get resource_ids for a dataset |
+| `find_dataset_resources` | (internal) | Find dataset by title and return resource_ids |
 
 ### Schema Context
 
@@ -186,17 +251,19 @@ Context is cached for 1 hour per dataset (`dkan_nl_query:context:{dataset_id}`) 
 
 | Model ID | Provider | Label |
 |---|---|---|
-| `claude-sonnet-4-20250514` | Anthropic | Claude Sonnet 4 |
-| `claude-haiku-4-5-20251001` | Anthropic | Claude Haiku 4.5 |
-| `gpt-4o` | OpenAI | GPT-4o |
-| `gpt-4o-mini` | OpenAI | GPT-4o Mini |
+| `claude-opus-4-6` | Anthropic | Claude Opus 4.6 |
+| `claude-sonnet-4-6` | Anthropic | Claude Sonnet 4.6 |
+| `claude-haiku-4-5` | Anthropic | Claude Haiku 4.5 |
+| `gpt-5.4` | OpenAI | GPT-5.4 |
+| `gpt-5.4-mini-2026-03-17` | OpenAI | GPT-5.4 Mini |
+| `gpt-5.4-nano-2026-03-17` | OpenAI | GPT-5.4 Nano |
 
 ### Provider Selection
 
 `LlmProviderFactory` infers the provider from the model ID prefix:
 - `claude-` → `AnthropicProvider`
 - `gpt-`, `o1-`, `o3-`, `o4-` → `OpenAiProvider`
-- Unknown prefix → falls back to configured default provider
+- Unknown prefix → defaults to Anthropic
 
 ### Provider Interface
 
@@ -214,14 +281,23 @@ Both providers implement `LlmProviderInterface::stream()`, which handles client 
 
 The widget is a Drupal block rendering `nl-query-widget.html.twig` with attached JS/CSS.
 
+**Layout:** Sidebar (280px, always visible for authenticated users) + main chat area. Widget expands to 1180px when sidebar is active, 900px without.
+
 **Key features:**
 - **Chat thread** — scrollable message history with user (blue) and assistant (grey) bubbles
 - **SSE streaming** — text appears token-by-token as the LLM generates
 - **Markdown rendering** — responses parsed via marked.js (raw HTML stripped for XSS safety)
-- **Interactive data tables** — sortable columns, row count, CSV export button
+- **Vega-Lite charts** — inline visualizations with export actions, auto-sized to bubble width
+- **Interactive data tables** — collapsed by default with row count, sortable columns, CSV export
+- **Chat history sidebar** — searchable conversation list with dataset labels, pin/delete, active indicator
+- **Debug panel** — collapsible tool call log with args and API equivalents (admin-configurable)
 - **Model selector** — grouped dropdown (Anthropic / OpenAI) with optgroup labels
 - **Dataset selector** — dropdown populated from `/api/nl-query-datasets`, locks after first query
 - **Conversation context** — follow-up questions include last 10 history turns
 - **Copy button** — copies AI answer text to clipboard
 - **Textarea input** — auto-growing, Enter to submit, Shift+Enter for newline
 - **New conversation** — clears thread, history, unlocks dataset selector
+
+**External libraries** (loaded via CDN):
+- marked.js v5 — Markdown parsing
+- Vega v5, Vega-Lite v5, Vega-Embed v6 — Chart rendering

@@ -1,0 +1,28 @@
+<?php
+
+/**
+ * Install entity tables for NL Query conversations.
+ */
+function dkan_nl_query_update_10001(): void {
+  $entity_type_manager = \Drupal::entityTypeManager();
+  $entity_definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+
+  foreach (['nl_query_conversation', 'nl_query_message'] as $entity_type_id) {
+    $entity_type = $entity_type_manager->getDefinition($entity_type_id);
+    $entity_definition_update_manager->installEntityType($entity_type);
+  }
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function dkan_nl_query_uninstall(): void {
+  $entity_definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+
+  foreach (['nl_query_message', 'nl_query_conversation'] as $entity_type_id) {
+    $entity_type = $entity_definition_update_manager->getEntityType($entity_type_id);
+    if ($entity_type) {
+      $entity_definition_update_manager->uninstallEntityType($entity_type);
+    }
+  }
+}

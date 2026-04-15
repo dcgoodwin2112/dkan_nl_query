@@ -5,6 +5,9 @@ nl_query:
       css/nl-query.css: {}
   js:
     https://cdn.jsdelivr.net/npm/marked/marked.min.js: { type: external, minified: true }
+    https://cdn.jsdelivr.net/npm/vega@5/build/vega.min.js: { type: external, minified: true, attributes: { defer: false } }
+    https://cdn.jsdelivr.net/npm/vega-lite@5/build/vega-lite.min.js: { type: external, minified: true, attributes: { defer: false } }
+    https://cdn.jsdelivr.net/npm/vega-embed@6/build/vega-embed.min.js: { type: external, minified: true, attributes: { defer: false } }
     js/nl-query.js: {}
   dependencies:
     - core/drupal

@@ -62,7 +62,13 @@ class OpenAiProvider implements LlmProviderInterface {
       $params['tools'] = $openAiTools;
     }
 
-    $stream = $this->client->chat()->createStreamed($params);
+    try {
+      $stream = $this->client->chat()->createStreamed($params);
+    }
+    catch (\Throwable $e) {
+      $emit('error', ['message' => 'OpenAI API error: ' . $e->getMessage()]);
+      return ['stop_reason' => 'end_turn', 'content' => [], 'tool_uses' => []];
+    }
 
     $contentBlocks = [];
     $toolUses = [];
@@ -193,7 +199,7 @@ class OpenAiProvider implements LlmProviderInterface {
 
       $msg = [
         'role' => 'assistant',
-        'content' => implode("\n", $textParts) ?: NULL,
+        'content' => implode("\n", $textParts) ?: '',
       ];
       if ($toolCalls) {
         $msg['tool_calls'] = $toolCalls;

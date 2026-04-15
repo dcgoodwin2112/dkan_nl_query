@@ -1,4 +1,14 @@
 <div class="nl-query-widget" data-dataset-id="{{ dataset_id }}">
+  <div class="nl-query-sidebar" hidden>
+    <div class="nl-query-sidebar-header">History</div>
+    <div class="nl-query-sidebar-search">
+      <input type="text" class="nl-query-sidebar-search-input" placeholder="Search conversations..." />
+    </div>
+    <div class="nl-query-sidebar-list"></div>
+    <div class="nl-query-sidebar-footer"></div>
+  </div>
+
+  <div class="nl-query-main">
   <div class="nl-query-thread-header" hidden>
     <button type="button" class="nl-query-new-conversation">New conversation</button>
   </div>
@@ -43,4 +53,10 @@
       </div>
     </div>
   </form>
+
+  <details class="nl-query-debug">
+    <summary class="nl-query-debug-summary">Tool calls</summary>
+    <div class="nl-query-debug-log"></div>
+  </details>
+  </div>
 </div>
