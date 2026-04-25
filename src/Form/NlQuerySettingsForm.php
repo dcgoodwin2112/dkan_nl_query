@@ -128,6 +128,34 @@ class NlQuerySettingsForm extends ConfigFormBase {
       '#description' => $this->t('Display a collapsible panel showing raw tool calls, arguments, and API equivalents. Useful for developers and data scientists.'),
     ];
 
+    $form['widget_settings']['show_follow_up_suggestions'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Show follow-up suggestions'),
+      '#default_value' => $config->get('show_follow_up_suggestions') ?? TRUE,
+      '#description' => $this->t('Display suggested follow-up questions after each response. Uses an additional LLM call.'),
+    ];
+
+    $form['widget_settings']['show_api_call_button'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Show API call button'),
+      '#default_value' => $config->get('show_api_call_button') ?? TRUE,
+      '#description' => $this->t('Display a "Show API call" button alongside query results that reveals the equivalent DKAN REST API call.'),
+    ];
+
+    $form['widget_settings']['show_sql_button'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Show SQL button'),
+      '#default_value' => $config->get('show_sql_button') ?? TRUE,
+      '#description' => $this->t('Display a "Show SQL" button alongside query results that reveals the equivalent SQL query.'),
+    ];
+
+    $form['widget_settings']['show_sql_in_debug'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Show SQL in debug panel'),
+      '#default_value' => $config->get('show_sql_in_debug') ?? TRUE,
+      '#description' => $this->t('Display the equivalent SQL query in the tool calls debug panel entries.'),
+    ];
+
     $form['widget_settings']['save_chat_history'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Save chat history'),
@@ -151,6 +179,10 @@ class NlQuerySettingsForm extends ConfigFormBase {
       ->set('show_model_selector', (bool) $form_state->getValue('show_model_selector'))
       ->set('show_examples', (bool) $form_state->getValue('show_examples'))
       ->set('show_debug_panel', (bool) $form_state->getValue('show_debug_panel'))
+      ->set('show_follow_up_suggestions', (bool) $form_state->getValue('show_follow_up_suggestions'))
+      ->set('show_api_call_button', (bool) $form_state->getValue('show_api_call_button'))
+      ->set('show_sql_button', (bool) $form_state->getValue('show_sql_button'))
+      ->set('show_sql_in_debug', (bool) $form_state->getValue('show_sql_in_debug'))
       ->set('save_chat_history', (bool) $form_state->getValue('save_chat_history'))
       ->save();
 

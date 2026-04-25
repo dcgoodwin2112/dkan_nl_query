@@ -30,6 +30,8 @@
     var statusText = widget.querySelector('.nl-query-status-text');
     var errorEl = widget.querySelector('.nl-query-error');
     var examples = widget.querySelectorAll('.nl-query-example');
+    var examplesContainer = widget.querySelector('.nl-query-examples');
+    var originalExamplesHtml = examplesContainer ? examplesContainer.innerHTML : '';
 
     var settings = drupalSettings.dkanNlQuery || {};
     var configuredDatasetId = widget.dataset.datasetId || settings.datasetId || '';
@@ -42,6 +44,11 @@
 
     var debugDetails = widget.querySelector('.nl-query-debug');
     var debugLog = widget.querySelector('.nl-query-debug-log');
+    var debugLastIteration = 0;
+    var debugToolCount = 0;
+    var debugTotalMs = 0;
+    var debugMaxIteration = 0;
+    var lastApiEquivalent = null;
     var sidebar = widget.querySelector('.nl-query-sidebar');
     var sidebarList = widget.querySelector('.nl-query-sidebar-list');
     var sidebarSearchInput = widget.querySelector('.nl-query-sidebar-search-input');
@@ -59,6 +66,10 @@
     if (settings.showDebugPanel === false && debugDetails) {
       debugDetails.hidden = true;
     }
+    var showApiCallButton = settings.showApiCallButton !== false;
+    var showSqlButton = settings.showSqlButton !== false;
+    var showSqlInDebug = settings.showSqlInDebug !== false;
+    var lastSqlEquivalent = null;
 
     // Show sidebar for authenticated users with history enabled.
     var historyEnabled = settings.userAuthenticated && settings.saveChatHistory !== false;
@@ -145,8 +156,19 @@
         if (newConvoBtn) newConvoBtn.hidden = true;
         updateSidebarActiveState();
         if (debugLog) debugLog.innerHTML = '';
+        debugLastIteration = 0; debugToolCount = 0; debugTotalMs = 0; debugMaxIteration = 0; lastApiEquivalent = null; lastSqlEquivalent = null;
         if (debugDetails) debugDetails.open = false;
         input.placeholder = defaultPlaceholder;
+        if (examplesContainer && originalExamplesHtml) {
+          examplesContainer.innerHTML = originalExamplesHtml;
+          // Re-bind example button click handlers.
+          examplesContainer.querySelectorAll('.nl-query-example').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              input.value = btn.dataset.question;
+              input.focus();
+            });
+          });
+        }
         if (datasetSelect) {
           datasetSelect.disabled = false;
         }
@@ -386,7 +408,14 @@
           errorEl.textContent = data.message || 'An error occurred.';
           errorEl.hidden = false;
           break;
+        case 'suggestions':
+          if (data.items && data.items.length) {
+            renderSuggestions(data.items);
+          }
+          scrollToBottom();
+          break;
         case 'done':
+          renderDebugFooter();
           break;
       }
     }
@@ -445,12 +474,49 @@
       scrollToBottom();
     }
 
+    function renderSuggestions(items) {
+      if (!examplesContainer) return;
+      examplesContainer.innerHTML = '';
+      var label = document.createElement('span');
+      label.className = 'nl-query-suggestions-label';
+      label.textContent = 'Try next:';
+      examplesContainer.appendChild(label);
+      items.forEach(function (text) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'nl-query-suggestion-chip';
+        chip.textContent = text;
+        chip.addEventListener('click', function () {
+          runQuery(text);
+        });
+        examplesContainer.appendChild(chip);
+      });
+    }
+
     function scrollToBottom() {
       thread.scrollTop = thread.scrollHeight;
     }
 
     function renderToolCall(data) {
       if (!debugLog) return;
+
+      // Iteration separator when the step changes.
+      if (data.iteration && data.iteration !== debugLastIteration) {
+        if (debugLastIteration > 0) {
+          var sep = document.createElement('div');
+          sep.className = 'nl-query-debug-separator';
+          sep.textContent = 'Step ' + data.iteration + ' \u2014 Analyzing results';
+          debugLog.appendChild(sep);
+        }
+        debugLastIteration = data.iteration;
+      }
+
+      // Track accumulated stats.
+      debugToolCount++;
+      debugTotalMs += data.duration_ms || 0;
+      if (data.iteration > debugMaxIteration) {
+        debugMaxIteration = data.iteration;
+      }
 
       var entry = document.createElement('div');
       entry.className = 'nl-query-debug-entry' + (data.is_error ? ' nl-query-debug-error' : '');
@@ -485,9 +551,10 @@
         pre.textContent = JSON.stringify(data.input, null, 2);
         entry.appendChild(pre);
 
-        // For query tools, show equivalent API call.
+        // For query tools, show equivalent API call and SQL.
         if (data.name === 'query_datastore' || data.name === 'query_datastore_join') {
-          var apiCall = buildApiEquivalent(data.name, data.input);
+          var apiCall = buildApiEquivalent(data.name, data.input, data.resolved_resource_id);
+          lastApiEquivalent = apiCall;
           if (apiCall) {
             var apiEl = document.createElement('div');
             apiEl.className = 'nl-query-debug-api';
@@ -501,20 +568,148 @@
             apiEl.appendChild(apiPre);
             entry.appendChild(apiEl);
           }
+
+          var sqlCall = buildSqlEquivalent(data.name, data.input, data.resolved_resource_id);
+          lastSqlEquivalent = sqlCall;
+          if (showSqlInDebug && sqlCall) {
+            var sqlEl = document.createElement('div');
+            sqlEl.className = 'nl-query-debug-sql';
+            var sqlLabel = document.createElement('span');
+            sqlLabel.className = 'nl-query-debug-sql-label';
+            sqlLabel.textContent = 'SQL equivalent:';
+            sqlEl.appendChild(sqlLabel);
+            var sqlPre = document.createElement('pre');
+            sqlPre.className = 'nl-query-debug-args';
+            sqlPre.textContent = sqlCall;
+            sqlEl.appendChild(sqlPre);
+            entry.appendChild(sqlEl);
+          }
+        }
+      }
+
+      // Result summary line.
+      if (data.result_summary) {
+        var summaryText = formatResultSummary(data.name, data.result_summary);
+        if (summaryText) {
+          var resultEl = document.createElement('div');
+          resultEl.className = 'nl-query-debug-result';
+          if (data.result_summary.error) {
+            resultEl.className += ' nl-query-debug-result-error';
+          }
+          resultEl.textContent = summaryText;
+          entry.appendChild(resultEl);
         }
       }
 
       debugLog.appendChild(entry);
     }
 
-    function buildApiEquivalent(toolName, input) {
-      var resourceId = input.resource_id || '';
+    function formatResultSummary(name, summary) {
+      if (summary.error) {
+        return '\u2192 Error: ' + summary.error;
+      }
+      switch (name) {
+        case 'query_datastore':
+        case 'query_datastore_join':
+          return '\u2192 ' + (summary.result_count || 0).toLocaleString()
+            + ' of ' + (summary.total_rows || 0).toLocaleString() + ' rows'
+            + ' (limit ' + (summary.limit || 100) + ', offset ' + (summary.offset || 0) + ')';
+        case 'get_datastore_schema':
+          var cols = summary.columns || [];
+          var colList = cols.length > 5 ? cols.slice(0, 5).join(', ') + ', \u2026' : cols.join(', ');
+          return '\u2192 ' + (summary.column_count || 0) + ' columns' + (colList ? ': ' + colList : '');
+        case 'get_datastore_stats':
+          return '\u2192 ' + (summary.total_rows || 0).toLocaleString() + ' rows, ' + (summary.column_count || 0) + ' columns';
+        case 'get_import_status':
+          return '\u2192 ' + (summary.status || 'unknown')
+            + ' (' + (summary.num_of_rows || 0).toLocaleString() + ' rows, ' + (summary.num_of_columns || 0) + ' columns)';
+        case 'search_columns':
+          return '\u2192 ' + (summary.total_matches || 0) + ' match' + ((summary.total_matches || 0) !== 1 ? 'es' : '')
+            + ' across ' + (summary.resources_searched || 0) + ' resources';
+        case 'search_datasets':
+          return '\u2192 ' + (summary.result_count || 0) + ' of ' + (summary.total || 0) + ' results';
+        case 'list_datasets':
+          return '\u2192 ' + (summary.result_count || 0) + ' of ' + (summary.total || 0) + ' datasets';
+        case 'list_distributions':
+          return '\u2192 ' + (summary.count || 0) + ' distribution' + ((summary.count || 0) !== 1 ? 's' : '');
+        case 'find_dataset_resources':
+          return '\u2192 ' + (summary.title || 'Unknown') + ' (' + (summary.distribution_count || 0) + ' distribution' + ((summary.distribution_count || 0) !== 1 ? 's' : '') + ')';
+        case 'create_chart':
+          return '\u2192 chart rendered';
+        default:
+          return '';
+      }
+    }
+
+    function renderDebugFooter() {
+      if (!debugLog || debugToolCount === 0) return;
+      // Remove any existing footer.
+      var existing = debugLog.querySelector('.nl-query-debug-footer');
+      if (existing) existing.remove();
+
+      var footer = document.createElement('div');
+      footer.className = 'nl-query-debug-footer';
+      var footerParts = [];
+      footerParts.push(debugToolCount + ' tool call' + (debugToolCount !== 1 ? 's' : ''));
+      footerParts.push(debugMaxIteration + ' step' + (debugMaxIteration !== 1 ? 's' : ''));
+      footerParts.push(debugTotalMs.toLocaleString() + 'ms total');
+      footer.textContent = footerParts.join(' \u00b7 ');
+      debugLog.appendChild(footer);
+    }
+
+    function buildApiEquivalent(toolName, input, resolvedResourceId) {
+      var resourceId = resolvedResourceId || input.resource_id || '';
+      var isJoin = toolName === 'query_datastore_join' && input.join_resource_id;
       var body = {};
+
+      // Resources array — only needed for join queries (multi-resource endpoint).
+      if (isJoin) {
+        body.resources = [
+          { id: resourceId, alias: 't' },
+          { id: input.join_resource_id, alias: 'j' }
+        ];
+      }
+
+      // Properties: plain strings for single-resource, qualified objects for joins.
+      var properties = [];
       if (input.columns) {
-        body.properties = input.columns.split(',').map(function (c) {
-          return { property: c.trim() };
+        input.columns.split(',').forEach(function (c) {
+          c = c.trim();
+          if (isJoin && c.indexOf('.') !== -1) {
+            var parts = c.split('.');
+            properties.push({ resource: parts[0], property: parts[1] });
+          } else {
+            properties.push(c);
+          }
         });
       }
+
+      // Groupings.
+      if (input.groupings) {
+        body.groupings = input.groupings.split(',').map(function (c) {
+          c = c.trim();
+          if (isJoin && c.indexOf('.') !== -1) {
+            var parts = c.split('.');
+            return { resource: parts[0], property: parts[1] };
+          }
+          return c;
+        });
+      }
+
+      // Expressions are appended to properties.
+      if (input.expressions) {
+        try {
+          JSON.parse(input.expressions).forEach(function (expr) {
+            properties.push(expr);
+          });
+        } catch (e) {}
+      }
+
+      if (properties.length) {
+        body.properties = properties;
+      }
+
+      // Conditions.
       if (input.conditions) {
         try {
           body.conditions = JSON.parse(input.conditions);
@@ -522,31 +717,175 @@
           body.conditions = input.conditions;
         }
       }
+
+      // Sorts: qualified for joins, simple for single-resource.
       if (input.sort_field) {
-        body.sorts = [{ property: input.sort_field, order: input.sort_direction || 'asc' }];
+        var sort = { order: input.sort_direction || 'asc' };
+        if (isJoin && input.sort_field.indexOf('.') !== -1) {
+          var sortParts = input.sort_field.split('.');
+          sort.resource = sortParts[0];
+          sort.property = sortParts[1];
+        } else {
+          sort.property = input.sort_field;
+        }
+        body.sorts = [sort];
       }
-      if (input.limit) body.limit = input.limit;
+
+      // Joins: DKAN nested condition structure.
+      if (isJoin && input.join_on) {
+        var joinOn = input.join_on.trim();
+        if (joinOn.charAt(0) === '{') {
+          // JSON format.
+          try {
+            var parsed = JSON.parse(joinOn);
+            var left = parseQualifiedField(parsed.left || '', 't');
+            var right = parseQualifiedField(parsed.right || '', 'j');
+            body.joins = [{ resource: right.resource, condition: { resource: left.resource, property: left.property, value: right } }];
+          } catch (e) {
+            body.joins = [{ raw: joinOn }];
+          }
+        } else if (joinOn.indexOf('=') !== -1) {
+          // Simple "col1=col2" format.
+          var eqParts = joinOn.split('=');
+          var leftField = parseQualifiedField(eqParts[0].trim(), 't');
+          var rightField = parseQualifiedField(eqParts[1].trim(), 'j');
+          body.joins = [{ resource: rightField.resource, condition: { resource: leftField.resource, property: leftField.property, value: rightField } }];
+        }
+      }
+
+      body.limit = input.limit || 100;
       if (input.offset) body.offset = input.offset;
+      body.count = true;
+      body.results = true;
+      body.keys = true;
+
+      // Endpoint: joins use the multi-resource endpoint (no resource in path).
+      var endpoint = isJoin
+        ? 'POST /api/1/datastore/query'
+        : 'POST /api/1/datastore/query/' + resourceId;
+
+      return endpoint + '\n' + JSON.stringify(body, null, 2);
+    }
+
+    function buildSqlEquivalent(toolName, input, resolvedResourceId) {
+      var resourceId = resolvedResourceId || input.resource_id || 'resource';
+      var isJoin = toolName === 'query_datastore_join' && input.join_resource_id;
+      var parts = [];
+
+      // SELECT clause.
+      var selectCols = [];
+      if (input.columns) {
+        input.columns.split(',').forEach(function (c) {
+          selectCols.push(c.trim());
+        });
+      }
       if (input.expressions) {
         try {
-          body.properties = body.properties || [];
           JSON.parse(input.expressions).forEach(function (expr) {
-            body.properties.push(expr);
+            var fn = (expr.operator || 'value').toUpperCase();
+            var col = expr.operands || expr.property || '*';
+            if (Array.isArray(col)) col = col.join(', ');
+            var alias = expr.alias || '';
+            var exprStr = fn + '(' + col + ')';
+            if (alias) exprStr += ' AS ' + alias;
+            selectCols.push(exprStr);
           });
         } catch (e) {}
       }
+      parts.push('SELECT ' + (selectCols.length ? selectCols.join(', ') : '*'));
+
+      // FROM clause.
+      var tableName = 'datastore_' + resourceId.replace(/-/g, '_');
+      if (isJoin) {
+        parts.push('FROM ' + tableName + ' AS t');
+      } else {
+        parts.push('FROM ' + tableName);
+      }
+
+      // JOIN clause.
+      if (isJoin && input.join_on) {
+        var joinTable = 'datastore_' + input.join_resource_id.replace(/-/g, '_');
+        var joinOn = input.join_on.trim();
+        var onClause = '';
+        if (joinOn.charAt(0) === '{') {
+          try {
+            var parsed = JSON.parse(joinOn);
+            onClause = (parsed.left || 't.id') + ' = ' + (parsed.right || 'j.id');
+          } catch (e) {
+            onClause = joinOn;
+          }
+        } else if (joinOn.indexOf('=') !== -1) {
+          var eqParts = joinOn.split('=');
+          var left = eqParts[0].trim();
+          var right = eqParts[1].trim();
+          if (left.indexOf('.') === -1) left = 't.' + left;
+          if (right.indexOf('.') === -1) right = 'j.' + right;
+          onClause = left + ' = ' + right;
+        } else {
+          onClause = joinOn;
+        }
+        parts.push('JOIN ' + joinTable + ' AS j ON ' + onClause);
+      }
+
+      // WHERE clause.
+      if (input.conditions) {
+        try {
+          var conditions = JSON.parse(input.conditions);
+          if (Array.isArray(conditions) && conditions.length) {
+            var whereClauses = conditions.map(function (cond) {
+              var col = cond.property || cond.column || '?';
+              if (isJoin && cond.resource) col = cond.resource + '.' + col;
+              var op = (cond.operator || '=').toUpperCase();
+              var val = cond.value;
+              if (typeof val === 'string') val = "'" + val.replace(/'/g, "''") + "'";
+              if (op === 'LIKE' || op === 'NOT LIKE') {
+                return col + ' ' + op + ' ' + val;
+              }
+              if (op === 'IN' || op === 'NOT IN') {
+                var vals = Array.isArray(cond.value) ? cond.value : [cond.value];
+                var formatted = vals.map(function (v) {
+                  return typeof v === 'string' ? "'" + v.replace(/'/g, "''") + "'" : v;
+                });
+                return col + ' ' + op + ' (' + formatted.join(', ') + ')';
+              }
+              if (op === 'BETWEEN') {
+                return col + ' BETWEEN ' + cond.value;
+              }
+              return col + ' ' + op + ' ' + val;
+            });
+            parts.push('WHERE ' + whereClauses.join('\n  AND '));
+          }
+        } catch (e) {}
+      }
+
+      // GROUP BY clause.
       if (input.groupings) {
-        body.groupings = input.groupings.split(',').map(function (c) {
-          return { property: c.trim() };
-        });
+        parts.push('GROUP BY ' + input.groupings);
       }
-      if (toolName === 'query_datastore_join' && input.join_resource_id) {
-        body.joins = [{
-          resource_id: input.join_resource_id,
-          on: input.join_on,
-        }];
+
+      // ORDER BY clause.
+      if (input.sort_field) {
+        var dir = (input.sort_direction || 'asc').toUpperCase();
+        parts.push('ORDER BY ' + input.sort_field + ' ' + dir);
       }
-      return 'POST /api/1/datastore/query/' + resourceId + '\n' + JSON.stringify(body, null, 2);
+
+      // LIMIT / OFFSET.
+      var limit = input.limit || 100;
+      parts.push('LIMIT ' + limit);
+      if (input.offset) {
+        parts.push('OFFSET ' + input.offset);
+      }
+
+      return parts.join('\n');
+    }
+
+    function parseQualifiedField(field, defaultResource) {
+      field = field.trim();
+      if (field.indexOf('.') !== -1) {
+        var parts = field.split('.');
+        return { resource: parts[0], property: parts[1] };
+      }
+      return { resource: defaultResource, property: field };
     }
 
     function renderTable(data, container) {
@@ -581,6 +920,26 @@
       toggleBtn.textContent = 'Show table';
       actions.appendChild(toggleBtn);
 
+      // "Show API call" button — between table toggle and CSV.
+      var capturedApiEquivalent = showApiCallButton ? lastApiEquivalent : null;
+      if (capturedApiEquivalent) {
+        var apiBtn = document.createElement('button');
+        apiBtn.type = 'button';
+        apiBtn.className = 'nl-query-api-btn';
+        apiBtn.textContent = 'Show API call';
+        actions.appendChild(apiBtn);
+      }
+
+      // "Show SQL" button — after API button.
+      var capturedSqlEquivalent = showSqlButton ? lastSqlEquivalent : null;
+      if (capturedSqlEquivalent) {
+        var sqlBtn = document.createElement('button');
+        sqlBtn.type = 'button';
+        sqlBtn.className = 'nl-query-sql-btn';
+        sqlBtn.textContent = 'Show SQL';
+        actions.appendChild(sqlBtn);
+      }
+
       var csvBtn = document.createElement('button');
       csvBtn.type = 'button';
       csvBtn.className = 'nl-query-csv-btn';
@@ -592,6 +951,72 @@
 
       summaryBar.appendChild(actions);
       container.appendChild(summaryBar);
+
+      // API call collapsible panel.
+      if (capturedApiEquivalent) {
+        var apiWrapper = document.createElement('div');
+        apiWrapper.className = 'nl-query-api-wrapper';
+        apiWrapper.hidden = true;
+
+        var apiPre = document.createElement('pre');
+        apiPre.className = 'nl-query-api-code';
+        apiPre.textContent = capturedApiEquivalent;
+        apiWrapper.appendChild(apiPre);
+
+        var copyApiBtn = document.createElement('button');
+        copyApiBtn.type = 'button';
+        copyApiBtn.className = 'nl-query-api-copy';
+        copyApiBtn.textContent = 'Copy';
+        copyApiBtn.addEventListener('click', function () {
+          navigator.clipboard.writeText(capturedApiEquivalent).then(function () {
+            copyApiBtn.textContent = 'Copied!';
+            setTimeout(function () { copyApiBtn.textContent = 'Copy'; }, 1500);
+          });
+        });
+        apiWrapper.appendChild(copyApiBtn);
+
+        container.appendChild(apiWrapper);
+
+        apiBtn.addEventListener('click', function () {
+          var isHidden = apiWrapper.hidden;
+          apiWrapper.hidden = !isHidden;
+          apiBtn.textContent = isHidden ? 'Hide API call' : 'Show API call';
+          scrollToBottom();
+        });
+      }
+
+      // SQL collapsible panel.
+      if (capturedSqlEquivalent) {
+        var sqlWrapper = document.createElement('div');
+        sqlWrapper.className = 'nl-query-sql-wrapper';
+        sqlWrapper.hidden = true;
+
+        var sqlPre = document.createElement('pre');
+        sqlPre.className = 'nl-query-sql-code';
+        sqlPre.textContent = capturedSqlEquivalent;
+        sqlWrapper.appendChild(sqlPre);
+
+        var copySqlBtn = document.createElement('button');
+        copySqlBtn.type = 'button';
+        copySqlBtn.className = 'nl-query-sql-copy';
+        copySqlBtn.textContent = 'Copy';
+        copySqlBtn.addEventListener('click', function () {
+          navigator.clipboard.writeText(capturedSqlEquivalent).then(function () {
+            copySqlBtn.textContent = 'Copied!';
+            setTimeout(function () { copySqlBtn.textContent = 'Copy'; }, 1500);
+          });
+        });
+        sqlWrapper.appendChild(copySqlBtn);
+
+        container.appendChild(sqlWrapper);
+
+        sqlBtn.addEventListener('click', function () {
+          var isHidden = sqlWrapper.hidden;
+          sqlWrapper.hidden = !isHidden;
+          sqlBtn.textContent = isHidden ? 'Hide SQL' : 'Show SQL';
+          scrollToBottom();
+        });
+      }
 
       // Build table wrapper (collapsed by default).
       var tableWrapper = document.createElement('div');
@@ -853,6 +1278,7 @@
           thread.innerHTML = '';
           errorEl.hidden = true;
           if (debugLog) debugLog.innerHTML = '';
+          debugLastIteration = 0; debugToolCount = 0; debugTotalMs = 0; debugMaxIteration = 0; lastApiEquivalent = null; lastSqlEquivalent = null;
           currentConversationId = id;
 
           if (threadHeader) threadHeader.hidden = false;
@@ -921,6 +1347,7 @@
                 msg.tool_calls.forEach(function (tc) {
                   renderToolCall(tc);
                 });
+                renderDebugFooter();
               }
 
               thread.appendChild(bubble);

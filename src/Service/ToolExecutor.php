@@ -99,7 +99,7 @@ class ToolExecutor {
    * resource_id fails validation, falls back to fuzzy matching against
    * all known resources (handles LLM hex string corruption).
    */
-  protected function resolveResourceId(string $input): ?string {
+  public function resolveResourceId(string $input): ?string {
     // If it looks like a resource_id, validate it exists.
     if (str_contains($input, '__')) {
       $status = $this->datastoreTools->getImportStatus($input);
@@ -171,6 +171,22 @@ class ToolExecutor {
           if (($status['status'] ?? '') === 'done') {
             return $rid;
           }
+        }
+      }
+    }
+    return NULL;
+  }
+
+  /**
+   * Find the distribution UUID for a given resource_id.
+   */
+  public function resolveDistributionUuid(string $resourceId): ?string {
+    $datasets = $this->metastoreTools->listDatasets(0, 50);
+    foreach ($datasets['datasets'] ?? [] as $ds) {
+      $dists = $this->metastoreTools->listDistributions($ds['identifier']);
+      foreach ($dists['distributions'] ?? [] as $dist) {
+        if (($dist['resource_id'] ?? '') === $resourceId && !empty($dist['identifier'])) {
+          return $dist['identifier'];
         }
       }
     }

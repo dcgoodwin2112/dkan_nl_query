@@ -156,6 +156,26 @@ class NlQueryController {
         }
       }
 
+      // Generate follow-up suggestions if enabled.
+      $nlConfig = $this->configFactory->get('dkan_nl_query.settings');
+      if (($nlConfig->get('show_follow_up_suggestions') ?? TRUE) && !empty(trim($result['answer'] ?? ''))) {
+        try {
+          $suggestions = $this->nlQueryService->generateSuggestions(
+            $question,
+            $result['answer'],
+            $result['tool_calls'] ?? [],
+          );
+          if ($suggestions) {
+            $emit('suggestions', ['items' => $suggestions]);
+          }
+        }
+        catch (\Throwable $e) {
+          \Drupal::logger('dkan_nl_query')->warning('Suggestions failed: @message', [
+            '@message' => $e->getMessage(),
+          ]);
+        }
+      }
+
       echo "event: done\ndata: {}\n\n";
       flush();
     }, 200, [

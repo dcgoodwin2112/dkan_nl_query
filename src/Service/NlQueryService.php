@@ -138,7 +138,7 @@ class NlQueryService {
           if (empty($spec['height']) || $spec['height'] === 'container') {
             $spec['height'] = 400;
           }
-          $this->loggerFactory->get('dkan_nl_query')->notice('Chart spec: @spec', [
+          $this->loggerFactory->get('dkan_nl_query')->debug('Chart spec: @spec', [
             '@spec' => json_encode($spec),
           ]);
           $emit('chart', ['spec' => $spec]);
@@ -148,6 +148,7 @@ class NlQueryService {
             'input' => ['spec' => '(Vega-Lite spec)'],
             'duration_ms' => 0,
             'iteration' => $i + 1,
+            'result_summary' => ['status' => 'chart_rendered'],
           ];
           $emit('tool_call', end($collectedToolCalls));
           $toolResults[] = [
@@ -159,10 +160,22 @@ class NlQueryService {
           continue;
         }
 
-        $this->loggerFactory->get('dkan_nl_query')->notice('Tool call: @name with @args', [
+        $this->loggerFactory->get('dkan_nl_query')->debug('Tool call: @name with @args', [
           '@name' => $toolUse['name'],
           '@args' => json_encode($toolUse['input']),
         ]);
+
+        // Resolve resource_id before execute so we can pass it to the frontend.
+        // The API equivalent needs the distribution UUID (not the internal
+        // identifier__version resource_id).
+        $resolvedResourceId = NULL;
+        $distributionUuid = NULL;
+        if (isset($toolUse['input']['resource_id'])) {
+          $resolvedResourceId = $this->toolExecutor->resolveResourceId($toolUse['input']['resource_id']);
+          if ($resolvedResourceId) {
+            $distributionUuid = $this->toolExecutor->resolveDistributionUuid($resolvedResourceId);
+          }
+        }
 
         $startTime = hrtime(TRUE);
         $result = $this->toolExecutor->execute($toolUse['name'], $toolUse['input']);
@@ -171,9 +184,11 @@ class NlQueryService {
         $collectedToolCalls[] = [
           'name' => $toolUse['name'],
           'input' => $toolUse['input'],
+          'resolved_resource_id' => $distributionUuid ?? $resolvedResourceId,
           'duration_ms' => $durationMs,
           'iteration' => $i + 1,
           'is_error' => isset($result['error']),
+          'result_summary' => $this->buildResultSummary($toolUse['name'], $result),
         ];
         $emit('tool_call', end($collectedToolCalls));
 
@@ -200,6 +215,94 @@ class NlQueryService {
       'table_data' => $collectedTableData,
       'tool_calls' => $collectedToolCalls,
     ];
+  }
+
+  /**
+   * Generate follow-up question suggestions via a lightweight LLM call.
+   */
+  public function generateSuggestions(string $question, string $answer, array $toolCalls): array {
+    $provider = $this->providerFactory->createForModel('claude-haiku-4-5');
+    $systemPrompt = 'You suggest follow-up questions for a data query interface. '
+      . 'Given the user\'s question and the assistant\'s answer, generate exactly 3 short, '
+      . 'specific follow-up questions that would help the user explore the data further. '
+      . 'Return ONLY a JSON array of strings, nothing else. Example: ["question 1","question 2","question 3"]';
+
+    $messages = [
+      ['role' => 'user', 'content' => "User asked: {$question}\n\nAssistant answered: " . mb_substr($answer, 0, 500)],
+    ];
+
+    $response = $provider->stream($systemPrompt, $messages, [], 'claude-haiku-4-5', 150, fn() => NULL);
+
+    $text = '';
+    foreach ($response['content'] ?? [] as $block) {
+      if (($block['type'] ?? '') === 'text') {
+        $text .= $block['text'];
+      }
+    }
+
+    // Strip markdown code fences if present.
+    $text = trim($text);
+    if (preg_match('/```(?:json)?\s*(.*?)\s*```/s', $text, $m)) {
+      $text = $m[1];
+    }
+
+    $parsed = json_decode($text, TRUE);
+    if (is_array($parsed) && count($parsed) >= 1) {
+      return array_slice(array_values($parsed), 0, 3);
+    }
+    return [];
+  }
+
+  /**
+   * Build a compact result summary for the debug panel.
+   */
+  protected function buildResultSummary(string $toolName, array $result): array {
+    if (isset($result['error'])) {
+      return ['error' => $result['error']];
+    }
+
+    return match ($toolName) {
+      'query_datastore', 'query_datastore_join' => [
+        'result_count' => $result['result_count'] ?? count($result['results'] ?? []),
+        'total_rows' => $result['total_rows'] ?? 0,
+        'limit' => $result['limit'] ?? 100,
+        'offset' => $result['offset'] ?? 0,
+      ],
+      'get_datastore_schema' => [
+        'column_count' => count($result['columns'] ?? []),
+        'columns' => array_column($result['columns'] ?? [], 'name'),
+      ],
+      'get_datastore_stats' => [
+        'total_rows' => $result['total_rows'] ?? 0,
+        'column_count' => count($result['columns'] ?? []),
+      ],
+      'get_import_status' => [
+        'status' => $result['status'] ?? 'unknown',
+        'num_of_rows' => $result['num_of_rows'] ?? 0,
+        'num_of_columns' => $result['num_of_columns'] ?? 0,
+      ],
+      'search_columns' => [
+        'total_matches' => $result['total_matches'] ?? count($result['matches'] ?? []),
+        'resources_searched' => $result['resources_searched'] ?? 0,
+      ],
+      'search_datasets' => [
+        'result_count' => count($result['results'] ?? []),
+        'total' => $result['total'] ?? 0,
+      ],
+      'list_datasets' => [
+        'result_count' => count($result['datasets'] ?? []),
+        'total' => $result['total'] ?? 0,
+      ],
+      'list_distributions' => [
+        'count' => count($result['distributions'] ?? []),
+      ],
+      'find_dataset_resources' => [
+        'dataset_id' => $result['dataset_id'] ?? '',
+        'title' => $result['title'] ?? '',
+        'distribution_count' => count($result['distributions'] ?? []),
+      ],
+      default => [],
+    };
   }
 
 }
