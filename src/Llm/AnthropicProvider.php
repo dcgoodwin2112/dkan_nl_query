@@ -36,13 +36,16 @@ class AnthropicProvider implements LlmProviderInterface {
     int $maxTokens,
     callable $emit,
   ): array {
-    $stream = $this->client->messages->createStream(
-      maxTokens: $maxTokens,
-      messages: $messages,
-      model: $model,
-      system: $systemPrompt,
-      tools: $tools,
-    );
+    $params = [
+      'maxTokens' => $maxTokens,
+      'messages' => $messages,
+      'model' => $model,
+      'system' => $systemPrompt,
+    ];
+    if ($tools) {
+      $params['tools'] = $tools;
+    }
+    $stream = $this->client->messages->createStream(...$params);
 
     $contentBlocks = [];
     $toolUses = [];

@@ -6,4 +6,6 @@ max_iterations: 10
 show_model_selector: true
 show_examples: true
 show_debug_panel: false
+show_follow_up_suggestions: true
+show_api_call_button: true
 save_chat_history: true

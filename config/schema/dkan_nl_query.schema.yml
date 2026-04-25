@@ -26,6 +26,18 @@ dkan_nl_query.settings:
     show_debug_panel:
       type: boolean
       label: 'Show tool calls debug panel'
+    show_follow_up_suggestions:
+      type: boolean
+      label: 'Show follow-up question suggestions'
+    show_api_call_button:
+      type: boolean
+      label: 'Show API call button on query results'
+    show_sql_button:
+      type: boolean
+      label: 'Show SQL button on query results'
+    show_sql_in_debug:
+      type: boolean
+      label: 'Show SQL in debug panel'
     save_chat_history:
       type: boolean
       label: 'Save chat history'

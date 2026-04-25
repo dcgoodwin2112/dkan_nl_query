@@ -6,6 +6,7 @@ use Drupal\Core\Block\BlockBase;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+use Drupal\Core\Session\AccountProxyInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
@@ -39,11 +40,19 @@ class NlQueryBlock extends BlockBase implements ContainerFactoryPluginInterface 
   protected ConfigFactoryInterface $configFactory;
 
   /**
+   * The current user.
+   *
+   * @var \Drupal\Core\Session\AccountProxyInterface
+   */
+  protected AccountProxyInterface $currentUser;
+
+  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): static {
     $instance = new static($configuration, $plugin_id, $plugin_definition);
     $instance->configFactory = $container->get('config.factory');
+    $instance->currentUser = $container->get('current_user');
     return $instance;
   }
 
@@ -97,8 +106,11 @@ class NlQueryBlock extends BlockBase implements ContainerFactoryPluginInterface 
             'showModelSelector' => $config->get('show_model_selector') ?? TRUE,
             'showExamples' => $config->get('show_examples') ?? TRUE,
             'showDebugPanel' => $config->get('show_debug_panel') ?? FALSE,
+            'showApiCallButton' => $config->get('show_api_call_button') ?? TRUE,
+            'showSqlButton' => $config->get('show_sql_button') ?? TRUE,
+            'showSqlInDebug' => $config->get('show_sql_in_debug') ?? TRUE,
             'saveChatHistory' => $config->get('save_chat_history') ?? TRUE,
-            'userAuthenticated' => \Drupal::currentUser()->isAuthenticated(),
+            'userAuthenticated' => $this->currentUser->isAuthenticated(),
           ],
         ],
       ],
