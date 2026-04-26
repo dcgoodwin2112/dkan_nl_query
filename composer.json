@@ -16,7 +16,7 @@
   "autoload-dev": {
     "psr-4": {
       "Drupal\\Tests\\dkan_nl_query\\": "tests/src/",
-      "Drupal\\dkan_mcp\\": "../dkan_mcp/src/"
+      "Drupal\\dkan_query_tools\\": "../dkan_query_tools/src/"
     }
   },
   "config": {

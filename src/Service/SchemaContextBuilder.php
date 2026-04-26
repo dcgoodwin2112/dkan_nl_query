@@ -3,8 +3,8 @@
 namespace Drupal\dkan_nl_query\Service;
 
 use Drupal\Core\Cache\CacheBackendInterface;
-use Drupal\dkan_mcp\Tools\DatastoreTools;
-use Drupal\dkan_mcp\Tools\MetastoreTools;
+use Drupal\dkan_query_tools\Tool\DatastoreTools;
+use Drupal\dkan_query_tools\Tool\MetastoreTools;
 
 /**
  * Builds schema context for Claude's system prompt.

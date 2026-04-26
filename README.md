@@ -1,11 +1,11 @@
 # DKAN Natural Language Query
 
-Drupal module that adds a chat-style natural language interface for querying DKAN datasets. Users type questions in plain English, an LLM translates them into structured datastore queries via dkan_mcp tool services, and results stream back as interactive tables, Vega-Lite charts, and AI-generated summaries. Supports Anthropic Claude and OpenAI GPT models.
+Drupal module that adds a chat-style natural language interface for querying DKAN datasets. Users type questions in plain English, an LLM translates them into structured datastore queries via `dkan_query_tools` services, and results stream back as interactive tables, Vega-Lite charts, and AI-generated summaries. Supports Anthropic Claude and OpenAI GPT models.
 
 ## Requirements
 
 - Drupal 10.2+ or 11
-- `dkan_mcp` module enabled
+- `dkan_query_tools` module enabled
 - At least one LLM SDK installed:
   - Anthropic: `anthropic-ai/sdk` (for Claude models)
   - OpenAI: `openai-php/client` (for GPT models)
@@ -13,17 +13,26 @@ Drupal module that adds a chat-style natural language interface for querying DKA
 
 ## Installation
 
-```bash
-# Install LLM SDKs (one or both)
-composer require anthropic-ai/sdk
-composer require openai-php/client
+1. Install the `dkan_query_tools` module first — it provides the catalog/datastore/search tool classes that this module's `ToolExecutor` and `SchemaContextBuilder` depend on. See [dkan_query_tools README](../dkan_query_tools/README.md) for full instructions; in short:
 
-# Enable the module
-drush en dkan_nl_query
+   ```bash
+   # Add to composer.json then:
+   composer update dcgoodwin2112/dkan_query_tools
+   drush en dkan_query_tools
+   ```
 
-# Configure API keys
-# Visit /admin/config/dkan/nl-query
-```
+2. Install at least one LLM SDK and enable this module:
+
+   ```bash
+   composer require anthropic-ai/sdk      # for Claude models
+   composer require openai-php/client     # for GPT models (optional)
+
+   drush en dkan_nl_query
+   ```
+
+3. Configure API keys at `/admin/config/dkan/nl-query`.
+
+Drupal will auto-enable `dkan_query_tools` as a dependency if it isn't already enabled, but the Composer step in (1) must happen first so the package is on disk.
 
 ## Configuration
 
@@ -198,25 +207,25 @@ The `NlQueryService` runs an iterative loop (max configurable, default 10 rounds
 
 Each LLM call is streamed — text appears token-by-token in the browser while the LLM generates.
 
-## dkan_mcp Integration
+## dkan_query_tools Integration
 
-This module consumes dkan_mcp tool classes as **Drupal services via dependency injection** — it does not use the MCP protocol (no JSON-RPC, no HTTP/stdio transport). The same PHP methods that power the MCP tools are called directly, avoiding serialization overhead.
+This module consumes `dkan_query_tools` tool classes as **Drupal services via dependency injection** — the same shared library that powers `dkan_mcp` and `dkan_drupal_ai_query`. It does not use the MCP protocol (no JSON-RPC, no HTTP/stdio transport).
 
 ### Services Consumed
 
-| dkan_mcp Service | Used By | Methods Called |
+| Service | Used By | Methods Called |
 |---|---|---|
-| `dkan_mcp.tools.metastore` | SchemaContextBuilder, ToolExecutor | `getDataset()`, `listDistributions()`, `listDatasets()` |
-| `dkan_mcp.tools.datastore` | SchemaContextBuilder, ToolExecutor | `queryDatastore()`, `queryDatastoreJoin()`, `getDatastoreSchema()`, `getDatastoreStats()`, `getImportStatus()`, `searchColumns()` |
-| `dkan_mcp.tools.search` | ToolExecutor | `searchDatasets()` |
+| `dkan_query_tools.metastore` | SchemaContextBuilder, ToolExecutor | `getDataset()`, `listDistributions()`, `listDatasets()` |
+| `dkan_query_tools.datastore` | SchemaContextBuilder, ToolExecutor | `queryDatastore()`, `queryDatastoreJoin()`, `getDatastoreSchema()`, `getDatastoreStats()`, `getImportStatus()`, `searchColumns()` |
+| `dkan_query_tools.search` | ToolExecutor | `searchDatasets()` |
 
 ### Tool Mapping
 
-dkan_mcp methods are exposed to the LLM as callable tools. The LLM sees tool definitions with names, descriptions, and JSON Schema input parameters. When it decides to call a tool, `ToolExecutor` routes the call to the correct dkan_mcp method.
+Tool methods are exposed to the LLM as callable tools. The LLM sees tool definitions with names, descriptions, and JSON Schema input parameters. When it decides to call a tool, `ToolExecutor` routes the call to the correct method on the corresponding `dkan_query_tools` service.
 
 **Query mode tools** (single-dataset, 7 tools):
 
-| LLM Tool Name | dkan_mcp Method | Purpose |
+| LLM Tool Name | Method | Purpose |
 |---|---|---|
 | `query_datastore` | `DatastoreTools::queryDatastore()` | Filter, sort, paginate, aggregate data |
 | `query_datastore_join` | `DatastoreTools::queryDatastoreJoin()` | Join two resources on a shared column |
@@ -227,7 +236,7 @@ dkan_mcp methods are exposed to the LLM as callable tools. The LLM sees tool def
 
 **Discovery mode tools** (cross-dataset, adds 4 more):
 
-| LLM Tool Name | dkan_mcp Method | Purpose |
+| LLM Tool Name | Method | Purpose |
 |---|---|---|
 | `search_datasets` | `SearchTools::searchDatasets()` | Find datasets by keyword |
 | `list_datasets` | `MetastoreTools::listDatasets()` | Browse all datasets |
@@ -236,7 +245,7 @@ dkan_mcp methods are exposed to the LLM as callable tools. The LLM sees tool def
 
 ### Schema Context
 
-`SchemaContextBuilder` uses dkan_mcp services to build rich context for the LLM's system prompt:
+`SchemaContextBuilder` uses `dkan_query_tools` services to build rich context for the LLM's system prompt:
 
 1. **Dataset metadata** — title, description, keywords, themes (from `MetastoreTools::getDataset()`)
 2. **Import filtering** — only includes resources with status `done` (from `DatastoreTools::getImportStatus()`)

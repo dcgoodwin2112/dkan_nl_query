@@ -4,5 +4,5 @@ description: Natural language query interface for DKAN datasets using Claude AI.
 core_version_requirement: ^10.2 || ^11
 package: DKAN
 dependencies:
-  - dkan_mcp:dkan_mcp
+  - dkan_query_tools:dkan_query_tools
 configure: dkan_nl_query.settings
