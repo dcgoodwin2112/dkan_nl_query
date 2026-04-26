@@ -2,9 +2,9 @@
 
 namespace Drupal\Tests\dkan_nl_query\Unit\Service;
 
-use Drupal\dkan_mcp\Tools\DatastoreTools;
-use Drupal\dkan_mcp\Tools\MetastoreTools;
-use Drupal\dkan_mcp\Tools\SearchTools;
+use Drupal\dkan_query_tools\Tool\DatastoreTools;
+use Drupal\dkan_query_tools\Tool\MetastoreTools;
+use Drupal\dkan_query_tools\Tool\SearchTools;
 use Drupal\dkan_nl_query\Service\ToolExecutor;
 use PHPUnit\Framework\TestCase;
 

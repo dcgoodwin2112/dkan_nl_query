@@ -2,16 +2,16 @@ services:
   dkan_nl_query.schema_context_builder:
     class: Drupal\dkan_nl_query\Service\SchemaContextBuilder
     arguments:
-      - '@dkan_mcp.tools.metastore'
-      - '@dkan_mcp.tools.datastore'
+      - '@dkan_query_tools.metastore'
+      - '@dkan_query_tools.datastore'
       - '@cache.default'
 
   dkan_nl_query.tool_executor:
     class: Drupal\dkan_nl_query\Service\ToolExecutor
     arguments:
-      - '@dkan_mcp.tools.datastore'
-      - '@dkan_mcp.tools.metastore'
-      - '@dkan_mcp.tools.search'
+      - '@dkan_query_tools.datastore'
+      - '@dkan_query_tools.metastore'
+      - '@dkan_query_tools.search'
 
   dkan_nl_query.llm_provider_factory:
     class: Drupal\dkan_nl_query\Llm\LlmProviderFactory

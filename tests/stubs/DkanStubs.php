@@ -2,7 +2,7 @@
 
 /**
  * @file
- * Stubs for DKAN/Drupal classes referenced by dkan_mcp Tool classes.
+ * Stubs for DKAN/Drupal classes referenced by dkan_query_tools Tool classes.
  *
  * These are needed so PHPUnit can load DatastoreTools, MetastoreTools,
  * and SearchTools for mocking without a full Drupal bootstrap.
