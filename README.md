@@ -1,5 +1,7 @@
 # DKAN Natural Language Query
 
+> **Deprecated.** This module is deprecated in favor of [`dkan_drupal_ai_query`](https://github.com/dcgoodwin2112/dkan_drupal_ai_query), which provides equivalent natural-language query functionality built on the [Drupal AI module](https://www.drupal.org/project/ai) (`drupal/ai` + `drupal/ai_agents`) instead of a bespoke agentic loop. New deployments should use `dkan_drupal_ai_query`. This repo is no longer accepting feature work; bug fixes only.
+
 Drupal module that adds a chat-style natural language interface for querying DKAN datasets. Users type questions in plain English, an LLM translates them into structured datastore queries via `dkan_query_tools` services, and results stream back as interactive tables, Vega-Lite charts, and AI-generated summaries. Supports Anthropic Claude and OpenAI GPT models.
 
 ## Requirements
